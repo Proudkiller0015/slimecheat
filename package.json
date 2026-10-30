@@ -1,0 +1,17 @@
+{
+	"name": "bc-song-upload",
+	"private": true,
+	"description": "Song Upload: upload an mp3 from Bondage Club to your own storage and copy its link for room music.",
+	"scripts": {
+		"format": "prettier --write song-upload.user.js test.js worker/src/index.js",
+		"check": "prettier --check song-upload.user.js test.js worker/src/index.js && eslint song-upload.user.js test.js worker/src/index.js && node --check song-upload.user.js",
+		"test": "node test.js"
+	},
+	"devDependencies": {
+		"@eslint/js": "9.39.4",
+		"eslint": "9.39.4",
+		"eslint-config-prettier": "10.1.8",
+		"globals": "16.5.0",
+		"prettier": "3.6.2"
+	}
+}

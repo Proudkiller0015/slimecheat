@@ -1,0 +1,11 @@
+{
+	"rules": [
+		{
+			"id": "songs-last-5-days",
+			"enabled": true,
+			"conditions": {},
+			"deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 432000 } },
+			"abortMultipartUploadsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+		}
+	]
+}

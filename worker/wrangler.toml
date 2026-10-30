@@ -1,0 +1,11 @@
+name = "song-upload"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+# Most bytes the bucket may hold, songs plus unfinished uploads; the oldest songs are deleted to stay under it (the free plan stores 10 GB).
+CAP_BYTES = "9500000000"
+
+[[r2_buckets]]
+binding = "SONGS"
+bucket_name = "song-upload"
