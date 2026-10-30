@@ -159,13 +159,17 @@ async function listSongs(request, env, cors) {
 }
 
 /**
- * A file name fit to keep as metadata: no control characters, at most 120 characters.
+ * A file name fit to keep as metadata: plain printable ASCII only, at most 120 characters.
+ * Accents come off their letters (é becomes e); anything else outside ASCII (Chinese,
+ * emoji, control characters) is dropped, and the spaces left behind are squeezed.
  * @param {string} name
  */
 function cleanName(name) {
 	return (
 		name
-			.replace(/\p{Cc}/gu, '')
+			.normalize('NFKD')
+			.replace(/[^\x20-\x7e]/g, '')
+			.replace(/ {2,}/g, ' ')
 			.trim()
 			.slice(0, 120) || 'song.mp3'
 	);

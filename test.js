@@ -219,7 +219,7 @@ async function workerChecks() {
 		'cap: a third 100 MB song deletes the oldest song (the 130 MB one) and keeps the rest',
 		s3.url && !(await alive(song.url)) && (await alive(s1.url)) && (await alive(s2.url)) && (await alive(s3.url)),
 	);
-	const s4 = await upload('Song <b>4</b>\u0007.mp3', mp3(150e6));
+	const s4 = await upload('Café 歌 <b>4</b>\u0007.mp3', mp3(150e6));
 	check(
 		'cap: a 150 MB song deletes only the next oldest (one.mp3); the newest survive',
 		s4.url && !(await alive(s1.url)) && (await alive(s2.url)) && (await alive(s3.url)) && (await alive(s4.url)),
@@ -228,10 +228,10 @@ async function workerChecks() {
 	const listed = await call('GET', '/upload/songs', { key: KEY });
 	const list = await listed.json();
 	check(
-		'list: newest first, names kept (control characters dropped), sizes, 5-day expiry, used and cap',
+		'list: newest first, names ASCII only (accents off, Chinese and control characters dropped), sizes, 5-day expiry, used and cap',
 		listed.status === 200 &&
 			listed.headers.get('access-control-allow-origin') === GAME &&
-			list.songs.map((x) => x.name).join('|') === 'Song <b>4</b>.mp3|three.mp3|two.mp3' &&
+			list.songs.map((x) => x.name).join('|') === 'Cafe <b>4</b>.mp3|three.mp3|two.mp3' &&
 			list.songs[0].url === s4.url &&
 			list.songs[0].size === 150e6 &&
 			list.songs.every((x) => x.expires - x.uploaded === 5 * 86400000 && Math.abs(Date.now() - x.uploaded) < 600000) &&
