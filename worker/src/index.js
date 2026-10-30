@@ -1,17 +1,19 @@
 /**
- * Song upload: the owner uploads mp3 files in parts (R2 multipart) with the upload key, and anyone can
- * play them back from this Worker. It never fetches other sites; it only writes to and reads from its bucket.
+ * Room uploads: the owner uploads mp3 songs in parts (R2 multipart) and room background images in one
+ * request, with the upload key, and anyone can load them back from this Worker. It never fetches other
+ * sites; it only writes to and reads from its bucket.
  *
  * POST   /upload                       { name, size } -> { key, uploadId, partSize }   (key needed)
  * PUT    /upload/<key>/<part>?uploadId  the part's bytes -> { etag }                   (key needed)
  * POST   /upload/<key>/done?uploadId    { parts } -> { url }                            (key needed)
  * DELETE /upload/<key>?uploadId         cancels an upload                               (key needed)
- * GET    /upload/songs                  -> { songs (newest first), used, cap }           (key needed)
- * DELETE /upload/songs/<key>            deletes a song                                  (key needed)
- * GET    /<key>                         the song, with Range support, for everyone
+ * PUT    /upload/image?name             the image's bytes -> { url }                    (key needed)
+ * GET    /upload/files                  -> { files (newest first), used, cap }           (key needed)
+ * DELETE /upload/files/<key>            deletes a song or an image                      (key needed)
+ * GET    /<key>                         the file, with Range support, for everyone
  *
- * The bucket stays under CAP_BYTES by deleting the oldest songs first. Songs and unfinished uploads are
- * also cleared by the bucket's lifecycle rules (lifecycle.json).
+ * The bucket stays under CAP_BYTES by deleting the oldest files first, songs and images alike. Files and
+ * unfinished uploads are also cleared by the bucket's lifecycle rules (lifecycle.json).
  */
 
 const MB = 1024 * 1024;
@@ -19,12 +21,18 @@ const MB = 1024 * 1024;
 const PART = 50 * MB;
 /** Largest song accepted. */
 const MAX_SONG = 500 * MB;
+/** Largest image accepted. */
+const MAX_IMAGE = 25 * MB;
 /** How long a started upload counts toward the bucket's size (the lifecycle rule aborts it after a day). */
 const UPLOAD_LIFE = 24 * 60 * 60 * 1000;
-/** How long a song is kept (the lifecycle rule in lifecycle.json deletes it then). */
-const SONG_LIFE = 5 * UPLOAD_LIFE;
-/** Song keys: random hex, always ending in .mp3. */
-const KEY_RE = /^[0-9a-f]{32}\.mp3$/;
+/** How long a file is kept (the lifecycle rule in lifecycle.json deletes it then). */
+const FILE_LIFE = 5 * UPLOAD_LIFE;
+/** File keys: random hex and the extension of the file's real type. */
+const KEY_RE = /^[0-9a-f]{32}\.(mp3|jpg|png|webp)$/;
+/** Image names the game takes as a room background (ChatAdminRoomCustomizationImageFormats). */
+const IMAGE_NAME = /\.(jpe?g|png|webp)$/i;
+/** The served type of each image extension. */
+const IMAGE_TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
 /** Where unfinished uploads note their size, so they count toward the cap. */
 const PENDING = 'pending/';
 /** Pages allowed to call the upload endpoints: the game and its mirrors. */
@@ -34,8 +42,8 @@ const ORIGINS = [
 	/^https?:\/\/([a-z0-9-]+\.)*bondage-?europe\.com$/,
 	/^https?:\/\/([a-z0-9-]+\.)*bondage-asia\.com$/,
 ];
-/** Headers on every song response: anyone may read songs, from any page. */
-const SONG_CORS = {
+/** Headers on every file response: anyone may read files from any page, and draw images on a canvas. */
+const FILE_CORS = {
 	'Access-Control-Allow-Origin': '*',
 	'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
 	'Access-Control-Allow-Headers': 'Range',
@@ -51,6 +59,27 @@ function isMp3(b) {
 		return true;
 	}
 	return b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && ((b[1] >> 3) & 3) !== 1 && ((b[1] >> 1) & 3) === 1;
+}
+
+/**
+ * The real type of an image from its first 12 bytes: 'jpg', 'png', 'webp', or '' for anything else.
+ * @param {Uint8Array} b
+ * @returns {'' | 'jpg' | 'png' | 'webp'}
+ */
+function imageType(b) {
+	const text = String.fromCharCode(...b);
+	if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) {
+		return 'jpg';
+	}
+	if (text.startsWith('\x89PNG')) {
+		return 'png';
+	}
+	return text.startsWith('RIFF') && text.slice(8, 12) === 'WEBP' ? 'webp' : '';
+}
+
+/** Random hex for a new file's key. */
+function randomName() {
+	return [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
 /**
@@ -79,14 +108,14 @@ async function authorised(request, env) {
 }
 
 /**
- * What the bucket holds: its songs, and the bytes promised to unfinished uploads (by their declared
- * size). Uploads older than a day are aborted on the way.
+ * What the bucket holds: its files (songs and images), oldest first, and the bytes promised to
+ * unfinished uploads (by their declared size). Uploads older than a day are aborted on the way.
  * @param {Env} env
- * @returns {Promise<{ songs: R2Object[], pending: number }>}
+ * @returns {Promise<{ files: R2Object[], pending: number }>}
  */
 async function scan(env) {
 	/** @type {R2Object[]} */
-	const songs = [];
+	const files = [];
 	let pending = 0;
 	/** @type {string | undefined} */
 	let cursor;
@@ -94,7 +123,7 @@ async function scan(env) {
 		const page = await env.SONGS.list({ cursor, include: ['customMetadata'] });
 		for (const o of page.objects) {
 			if (!o.key.startsWith(PENDING)) {
-				songs.push(o);
+				files.push(o);
 			} else if (Date.now() - o.uploaded.getTime() < UPLOAD_LIFE) {
 				pending += Number(o.customMetadata?.size) || 0;
 			} else {
@@ -103,54 +132,55 @@ async function scan(env) {
 		}
 		cursor = page.truncated ? page.cursor : undefined;
 	} while (cursor);
-	songs.sort((x, y) => x.uploaded.getTime() - y.uploaded.getTime());
-	return { songs, pending };
+	files.sort((x, y) => x.uploaded.getTime() - y.uploaded.getTime());
+	return { files, pending };
 }
 
 /**
- * Makes room for `need` more bytes under the cap by deleting the oldest songs first.
+ * Makes room for `need` more bytes under the cap by deleting the oldest files first, songs and images alike.
  * @param {Env} env
  * @param {number} need
- * @param {string} [keep] a song that must stay (the one just uploaded)
+ * @param {string} [keep] a file that must stay (the one just uploaded)
  * @returns {Promise<boolean>} whether it fits (it doesn't when unfinished uploads alone fill the cap)
  */
 async function makeRoom(env, need, keep) {
-	const { songs, pending } = await scan(env);
+	const { files, pending } = await scan(env);
 	const cap = Number(env.CAP_BYTES);
-	const others = songs.filter((o) => o.key !== keep);
-	let total = need + pending + songs.reduce((sum, o) => sum + o.size, 0);
+	const others = files.filter((o) => o.key !== keep);
+	let total = need + pending + files.reduce((sum, o) => sum + o.size, 0);
 	if (total - others.reduce((sum, o) => sum + o.size, 0) > cap) {
 		return false;
 	}
-	for (const song of others) {
+	for (const file of others) {
 		if (total <= cap) {
 			break;
 		}
-		await env.SONGS.delete(song.key);
-		total -= song.size;
+		await env.SONGS.delete(file.key);
+		total -= file.size;
 	}
 	return true;
 }
 
 /**
- * The owner's songs, newest first, with the storage used.
+ * The owner's songs and images, newest first, with the storage used.
  * @param {Request} request
  * @param {Env} env
  * @param {Record<string, string>} cors
  */
-async function listSongs(request, env, cors) {
-	const { songs, pending } = await scan(env);
+async function listFiles(request, env, cors) {
+	const { files, pending } = await scan(env);
 	const origin = new URL(request.url).origin;
 	return json(
 		{
-			songs: songs.reverse().map((o) => ({
+			files: files.reverse().map((o) => ({
 				url: `${origin}/${o.key}`,
 				name: o.customMetadata?.name || o.key,
+				kind: o.key.endsWith('.mp3') ? 'song' : 'image',
 				size: o.size,
 				uploaded: o.uploaded.getTime(),
-				expires: o.uploaded.getTime() + SONG_LIFE,
+				expires: o.uploaded.getTime() + FILE_LIFE,
 			})),
-			used: pending + songs.reduce((sum, o) => sum + o.size, 0),
+			used: pending + files.reduce((sum, o) => sum + o.size, 0),
 			cap: Number(env.CAP_BYTES),
 		},
 		200,
@@ -171,7 +201,7 @@ function cleanName(name) {
 			.replace(/[^\x20-\x7e]/g, '')
 			.replace(/ {2,}/g, ' ')
 			.trim()
-			.slice(0, 120) || 'song.mp3'
+			.slice(0, 120) || 'file'
 	);
 }
 
@@ -208,9 +238,9 @@ async function start(request, env, cors) {
 		return json({ error: 'Songs can be at most 500 MB.' }, 413, cors);
 	}
 	if (!(await makeRoom(env, size))) {
-		return json({ error: 'Other uploads in progress fill the song storage. Try again once they finish.' }, 507, cors);
+		return json({ error: 'Other uploads in progress fill the storage. Try again once they finish.' }, 507, cors);
 	}
-	const key = `${[...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('')}.mp3`;
+	const key = `${randomName()}.mp3`;
 	const multipart = await env.SONGS.createMultipartUpload(key, {
 		httpMetadata: { contentType: 'audio/mpeg' },
 		customMetadata: { name: cleanName(body.name) },
@@ -294,37 +324,75 @@ async function finish(request, env, cors, key, uploadId) {
 }
 
 /**
- * Plays a song back: whole, or the byte range asked for.
+ * Takes an image in one request: a name the game accepts, at most 25 MB, and bytes that really are a
+ * JPEG, PNG or WEBP. The link ends in the extension of the real type, whatever the name said.
+ * @param {Request} request
+ * @param {Env} env
+ * @param {Record<string, string>} cors
+ * @param {string} name
+ */
+async function putImage(request, env, cors, name) {
+	const size = Number(request.headers.get('Content-Length'));
+	if (!IMAGE_NAME.test(name)) {
+		return json({ error: 'Only .jpg, .jpeg, .png and .webp images can be uploaded.' }, 415, cors);
+	}
+	if (!Number.isInteger(size) || size < 1 || !request.body) {
+		return json({ error: 'The file is empty.' }, 400, cors);
+	}
+	if (size > MAX_IMAGE) {
+		return json({ error: 'Images can be at most 25 MB.' }, 413, cors);
+	}
+	const bytes = await request.arrayBuffer();
+	const type = imageType(new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength)));
+	if (!type) {
+		return json({ error: 'This file is not a real JPEG, PNG or WEBP image.' }, 415, cors);
+	}
+	if (bytes.byteLength !== size) {
+		return json({ error: 'The upload did not arrive whole. Try again.' }, 400, cors);
+	}
+	if (!(await makeRoom(env, size))) {
+		return json({ error: 'Other uploads in progress fill the storage. Try again once they finish.' }, 507, cors);
+	}
+	const key = `${randomName()}.${type}`;
+	await env.SONGS.put(key, bytes, { httpMetadata: { contentType: IMAGE_TYPES[type] }, customMetadata: { name: cleanName(name) } });
+	// Uploads that ran side by side may together pass the cap.
+	await makeRoom(env, 0, key);
+	return json({ url: `${new URL(request.url).origin}/${key}` }, 200, cors);
+}
+
+/**
+ * Serves a song or an image: whole, or the byte range asked for.
  * @param {Request} request
  * @param {Env} env
  * @param {string} key
  */
 async function serve(request, env, key) {
 	const head = request.method === 'HEAD';
-	let song;
+	let file;
 	try {
-		song = head ? await env.SONGS.head(key) : await env.SONGS.get(key, { range: request.headers, onlyIf: request.headers });
+		file = head ? await env.SONGS.head(key) : await env.SONGS.get(key, { range: request.headers, onlyIf: request.headers });
 	} catch (e) {
-		return new Response('Range Not Satisfiable', { status: 416, headers: SONG_CORS });
+		return new Response('Range Not Satisfiable', { status: 416, headers: FILE_CORS });
 	}
-	if (!song) {
-		return new Response('Not found', { status: 404, headers: SONG_CORS });
+	if (!file) {
+		return new Response('Not found', { status: 404, headers: FILE_CORS });
 	}
-	const headers = new Headers(SONG_CORS);
-	song.writeHttpMetadata(headers);
-	headers.set('ETag', song.httpEtag);
+	const headers = new Headers(FILE_CORS);
+	file.writeHttpMetadata(headers);
+	headers.set('ETag', file.httpEtag);
 	headers.set('Accept-Ranges', 'bytes');
 	headers.set('Cache-Control', 'public, max-age=86400');
-	if (!('body' in song)) {
-		headers.set('Content-Length', String(song.size));
+	headers.set('X-Content-Type-Options', 'nosniff');
+	if (!('body' in file)) {
+		headers.set('Content-Length', String(file.size));
 		return new Response(null, { status: head ? 200 : 304, headers });
 	}
-	const range = /** @type {{ offset: number, length: number } | undefined} */ (song.range);
+	const range = /** @type {{ offset: number, length: number } | undefined} */ (file.range);
 	if (range && request.headers.has('Range')) {
-		headers.set('Content-Range', `bytes ${range.offset}-${range.offset + range.length - 1}/${song.size}`);
-		return new Response(song.body, { status: 206, headers });
+		headers.set('Content-Range', `bytes ${range.offset}-${range.offset + range.length - 1}/${file.size}`);
+		return new Response(file.body, { status: 206, headers });
 	}
-	return new Response(song.body, { headers });
+	return new Response(file.body, { headers });
 }
 
 /**
@@ -333,21 +401,25 @@ async function serve(request, env, key) {
  * @param {Env} env
  * @param {Record<string, string>} cors
  * @param {string[]} path
- * @param {string} uploadId
+ * @param {URLSearchParams} query
  */
-async function upload(request, env, cors, path, uploadId) {
+async function upload(request, env, cors, path, query) {
 	const [, key = '', part = ''] = path;
+	const uploadId = query.get('uploadId') || '';
 	if (path.length === 1 && request.method === 'POST') {
 		return start(request, env, cors);
 	}
-	if (key === 'songs' && path.length === 2 && request.method === 'GET') {
-		return listSongs(request, env, cors);
+	if (key === 'image' && path.length === 2 && request.method === 'PUT') {
+		return putImage(request, env, cors, query.get('name') || '');
 	}
-	if (key === 'songs' && path.length === 3 && KEY_RE.test(part) && request.method === 'DELETE') {
+	if (key === 'files' && path.length === 2 && request.method === 'GET') {
+		return listFiles(request, env, cors);
+	}
+	if (key === 'files' && path.length === 3 && KEY_RE.test(part) && request.method === 'DELETE') {
 		await env.SONGS.delete(part);
 		return json({ ok: true }, 200, cors);
 	}
-	if (!KEY_RE.test(key) || !uploadId) {
+	if (!KEY_RE.test(key) || !key.endsWith('.mp3') || !uploadId) {
 		return json({ error: 'Not found' }, 404, cors);
 	}
 	if (path.length === 2 && request.method === 'DELETE') {
@@ -367,7 +439,7 @@ async function upload(request, env, cors, path, uploadId) {
  * @typedef {object} Env
  * @property {R2Bucket} SONGS
  * @property {string} [UPLOAD_KEY] the upload key (a Worker secret)
- * @property {string} CAP_BYTES most bytes the bucket may hold; the oldest songs make way for new ones
+ * @property {string} CAP_BYTES most bytes the bucket may hold; the oldest files make way for new ones
  */
 
 export default {
@@ -380,7 +452,7 @@ export default {
 		const path = url.pathname.slice(1).split('/');
 		if (path.length === 1 && KEY_RE.test(path[0])) {
 			if (request.method === 'OPTIONS') {
-				return new Response(null, { status: 204, headers: { ...SONG_CORS, 'Access-Control-Max-Age': '86400' } });
+				return new Response(null, { status: 204, headers: { ...FILE_CORS, 'Access-Control-Max-Age': '86400' } });
 			}
 			if (request.method === 'GET' || request.method === 'HEAD') {
 				return serve(request, env, path[0]);
@@ -407,7 +479,7 @@ export default {
 			return json({ error: 'Wrong or missing upload key.' }, 401, cors);
 		}
 		try {
-			return await upload(request, env, cors, path, url.searchParams.get('uploadId') || '');
+			return await upload(request, env, cors, path, url.searchParams);
 		} catch (e) {
 			return json({ error: 'The upload failed on the server. Try again.' }, 500, cors);
 		}

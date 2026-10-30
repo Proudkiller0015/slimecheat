@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Song Upload
+// @name         Room Uploads
 // @namespace    https://github.com/Proudkiller0015/bc-song-upload
-// @version      1.0.0
-// @description  Upload an mp3 to your own song storage and copy its link, for Bondage Club room music.
+// @version      1.1.0
+// @description  Upload an mp3 or a background image to your own storage and copy its link, for Bondage Club room music and room images.
 // @match        https://www.bondageprojects.elementfx.com/*
 // @match        https://bondageprojects.elementfx.com/*
 // @match        https://bondageprojects.com/*
@@ -22,6 +22,17 @@
 	const KEY = 'songUpload.options';
 	/** Largest song the storage takes. */
 	const MAX_SONG = 500 * 1024 * 1024;
+	/** Largest image the storage takes. */
+	const MAX_IMAGE = 25 * 1024 * 1024;
+	/** What each upload tab takes. */
+	const KINDS = {
+		songs: { pick: 'Upload song', hint: 'mp3 only, up to 500 MB', accept: '.mp3,audio/mpeg' },
+		images: {
+			pick: 'Upload image',
+			hint: 'jpg, png or webp, up to 25 MB',
+			accept: '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp',
+		},
+	};
 	/** Tries per part before the upload gives up. */
 	const TRIES = 3;
 
@@ -41,8 +52,9 @@
 		:host { all: initial; }
 		* { box-sizing: border-box; font: 14px/1.35 system-ui, sans-serif; }
 		#btn { position: fixed; z-index: 2147483000; width: 44px; height: 44px; border-radius: 50%; border: 2px solid #fff;
-			background: linear-gradient(145deg, #ff7cc0, #c53a8a); color: #fff; font-size: 22px; cursor: grab;
-			box-shadow: 0 2px 8px #0006; touch-action: none; }
+			background: linear-gradient(145deg, #ff7cc0, #c53a8a); color: #fff; cursor: grab; display: grid; place-items: center;
+			box-shadow: 0 2px 8px #0006; touch-action: none; padding: 0; }
+		#btn svg { width: 22px; height: 22px; pointer-events: none; }
 		#btn:active { cursor: grabbing; }
 		#panel { position: fixed; z-index: 2147483001; width: 300px; padding: 12px; border-radius: 14px; background: #fff7fb;
 			color: #3a1630; box-shadow: 0 4px 18px #0007; display: none; flex-direction: column; gap: 8px; }
@@ -64,23 +76,25 @@
 		.tab { flex: 1; padding: 5px; border-radius: 999px; border: 0; background: #ffd9ec; color: #3a1630; cursor: pointer; }
 		.tab.on { background: #e2448f; color: #fff; font-weight: 700; }
 		#list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
-		.song { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border-radius: 10px; background: #fff; }
-		.song b { overflow-wrap: anywhere; font-weight: 600; }
+		.file { display: flex; gap: 8px; padding: 6px 8px; border-radius: 10px; background: #fff; }
+		.file > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+		.file b { overflow-wrap: anywhere; font-weight: 600; }
+		.file img { width: 56px; height: 42px; flex: none; object-fit: cover; border-radius: 6px; background: #ffd9ec; }
 		.small { padding: 3px 9px; font-size: 12px; }
 		.sure { background: #b3002d; color: #fff; border-color: #b3002d; }
 		[hidden] { display: none !important; }
 	</style>
-	<button id="btn" title="Song upload (drag to move)">♪</button>
-	<div id="panel" role="dialog" aria-label="Song upload">
-		<div class="head"><b>Song upload</b><button class="round" id="gear" title="Settings">⚙</button><button class="round" id="close" title="Close">✕</button></div>
-		<div class="tabs" id="tabs"><button class="tab" data-view="main">Upload</button><button class="tab" data-view="songs">My songs</button></div>
+	<button id="btn" title="Room uploads (drag to move)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7 9l5-5 5 5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg></button>
+	<div id="panel" role="dialog" aria-label="Room uploads">
+		<div class="head"><b>Room uploads</b><button class="round" id="gear" title="Settings">⚙</button><button class="round" id="close" title="Close">✕</button></div>
+		<div class="tabs" id="tabs"><button class="tab" data-view="songs">Songs</button><button class="tab" data-view="images">Images</button><button class="tab" data-view="files">My files</button></div>
 		<div id="main">
-			<div class="row"><button class="go" id="pick">Upload file</button><span class="hint">mp3 only, up to 500 MB</span></div>
+			<div class="row"><button class="go" id="pick">Upload song</button><span class="hint" id="limits">mp3 only, up to 500 MB</span></div>
 			<input type="file" id="file" accept=".mp3,audio/mpeg" hidden>
 			<div id="prog" hidden><div class="bar"><div></div></div><div class="row"><span class="hint" id="pct"></span><button class="pill" id="stop">Cancel</button></div></div>
-			<div id="done" hidden><input type="text" id="link" readonly aria-label="Song link"><div class="row"><button class="go" id="copy">Copy link</button><span class="hint" id="copied"></span></div><span class="hint">The link lasts 5 days.</span></div>
+			<div id="done" hidden><input type="text" id="link" readonly aria-label="Link"><div class="row"><button class="go" id="copy">Copy link</button><span class="hint" id="copied"></span></div><span class="hint">The link lasts 5 days.</span></div>
 		</div>
-		<div id="songs" hidden>
+		<div id="files" hidden>
 			<div class="row"><span class="hint" id="used" style="flex:1"></span><button class="round" id="refresh" title="Refresh">↻</button></div>
 			<div id="list"></div>
 		</div>
@@ -105,6 +119,8 @@
 	const link = /** @type {HTMLInputElement} */ ($('link'));
 	/** @type {AbortController | null} The upload in progress. */
 	let running = null;
+	/** @type {keyof typeof KINDS} What the upload tab takes now. */
+	let kind = 'songs';
 
 	// Keys typed in the panel stay out of the game.
 	for (const type of ['keydown', 'keyup', 'keypress']) {
@@ -122,14 +138,22 @@
 	};
 
 	/**
-	 * Shows a view of the panel: 'main' (upload), 'songs' or 'setup'.
-	 * @param {'main' | 'songs' | 'setup'} name
+	 * Shows a view of the panel: an upload tab ('songs' or 'images'), 'files' or 'setup'.
+	 * @param {string} name
 	 */
 	const view = (name) => {
 		fail('');
-		for (const id of ['main', 'songs', 'setup']) {
-			$(id).hidden = id !== name;
+		const uploadTab = name === 'songs' || name === 'images';
+		if (uploadTab && name !== kind) {
+			kind = name;
+			$('pick').textContent = KINDS[kind].pick;
+			$('limits').textContent = KINDS[kind].hint;
+			fileInput.accept = KINDS[kind].accept;
+			$('done').hidden = true;
 		}
+		$('main').hidden = !uploadTab;
+		$('files').hidden = name !== 'files';
+		$('setup').hidden = name !== 'setup';
 		$('tabs').hidden = name === 'setup';
 		for (const tab of root.querySelectorAll('.tab')) {
 			tab.classList.toggle('on', /** @type {HTMLElement} */ (tab).dataset.view === name);
@@ -137,8 +161,8 @@
 		if (name === 'setup') {
 			/** @type {HTMLInputElement} */ ($('url')).value = opts.url;
 			/** @type {HTMLInputElement} */ ($('key')).value = opts.key;
-		} else if (name === 'songs') {
-			listSongs();
+		} else if (name === 'files') {
+			listFiles();
 		}
 		place();
 	};
@@ -182,7 +206,7 @@
 			save();
 		} else {
 			panel.classList.toggle('on');
-			view(opts.url && opts.key ? 'main' : 'setup');
+			view(opts.url && opts.key ? kind : 'setup');
 		}
 		drag = null;
 	});
@@ -191,14 +215,14 @@
 	});
 	addEventListener('resize', place);
 	$('close').addEventListener('click', () => panel.classList.remove('on'));
-	$('gear').addEventListener('click', () => view($('setup').hidden ? 'setup' : 'main'));
+	$('gear').addEventListener('click', () => view($('setup').hidden ? 'setup' : kind));
 	$('tabs').addEventListener('click', (e) => {
 		const tab = /** @type {HTMLElement} */ (e.target).closest('.tab');
 		if (tab instanceof HTMLElement) {
-			view(tab.dataset.view === 'songs' ? 'songs' : 'main');
+			view(tab.dataset.view || kind);
 		}
 	});
-	$('refresh').addEventListener('click', () => listSongs());
+	$('refresh').addEventListener('click', () => listFiles());
 	$('savebtn').addEventListener('click', () => {
 		opts.url = /** @type {HTMLInputElement} */ ($('url')).value.trim().replace(/\/+$/, '');
 		opts.key = /** @type {HTMLInputElement} */ ($('key')).value.trim();
@@ -207,7 +231,7 @@
 			return;
 		}
 		save();
-		view('main');
+		view(kind);
 	});
 	$('pick').addEventListener('click', () => {
 		if (!opts.url || !opts.key) {
@@ -243,13 +267,18 @@
 	});
 
 	/**
-	 * A size in MB, or GB from 1 GB up.
+	 * A size in KB under 1 MB, in MB, or in GB from 1 GB up.
 	 * @param {number} bytes
 	 */
-	const size = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${(bytes / 1e6).toFixed(1)} MB`);
+	const size = (bytes) => {
+		if (bytes >= 1e9) {
+			return `${(bytes / 1e9).toFixed(2)} GB`;
+		}
+		return bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(Math.round(bytes / 1e3), 1)} KB`;
+	};
 
 	/**
-	 * How long until a song is deleted, like "deletes in 4 days" or "deletes in 3 hours".
+	 * How long until a file is deleted, like "deletes in 4 days" or "deletes in 3 hours".
 	 * @param {number} expires
 	 */
 	const timeLeft = (expires) => {
@@ -271,21 +300,21 @@
 		return el;
 	};
 
-	/** Fills My songs from the upload address. */
-	const listSongs = async () => {
+	/** Fills My files (songs and images) from the upload address. */
+	const listFiles = async () => {
 		const list = $('list');
 		$('used').textContent = 'Loading…';
 		try {
-			/** @type {{ songs: { url: string, name: string, size: number, uploaded: number, expires: number }[], used: number, cap: number }} */
-			const answer = await call('GET', '/upload/songs', new AbortController().signal);
+			/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number }[], used: number, cap: number }} */
+			const answer = await call('GET', '/upload/files', new AbortController().signal);
 			$('used').textContent = `Used ${size(answer.used)} of ${size(answer.cap)}`;
 			list.replaceChildren(
-				...answer.songs.map((song) => {
-					const row = make('div', 'song');
+				...answer.files.map((file) => {
+					const row = make('div', 'file');
 					const copyBtn = make('button', 'go small', 'Copy link');
 					const del = /** @type {HTMLButtonElement} */ (make('button', 'pill small', 'Delete'));
 					copyBtn.addEventListener('click', async () => {
-						await copy(song.url);
+						await copy(file.url);
 						copyBtn.textContent = 'Copied!';
 					});
 					let sure = 0;
@@ -303,28 +332,37 @@
 						clearTimeout(sure);
 						del.disabled = true;
 						try {
-							await call('DELETE', `/upload/songs/${song.url.split('/').pop()}`, new AbortController().signal);
-							listSongs();
+							await call('DELETE', `/upload/files/${file.url.split('/').pop()}`, new AbortController().signal);
+							listFiles();
 						} catch (e) {
 							fail(/** @type {Error} */ (e).message);
 						}
 					});
 					const buttons = make('div', 'row');
 					buttons.append(copyBtn, del);
-					row.append(
-						make('b', '', song.name),
-						make('span', 'hint', `${size(song.size)} · ${new Date(song.uploaded).toLocaleString()} · ${timeLeft(song.expires)}`),
+					const info = make('div', '');
+					info.append(
+						make('b', '', file.name),
+						make('span', 'hint', `${size(file.size)} · ${new Date(file.uploaded).toLocaleString()} · ${timeLeft(file.expires)}`),
 						buttons,
 					);
+					if (file.kind === 'image') {
+						const thumb = /** @type {HTMLImageElement} */ (make('img', ''));
+						thumb.alt = '';
+						thumb.loading = 'lazy';
+						thumb.src = file.url;
+						row.append(thumb);
+					}
+					row.append(info);
 					return row;
 				}),
 			);
-			if (!answer.songs.length) {
-				list.append(make('span', 'hint', 'No songs yet.'));
+			if (!answer.files.length) {
+				list.append(make('span', 'hint', 'No files yet.'));
 			}
 		} catch (e) {
 			$('used').textContent = '';
-			fail(/** @type {Error} */ (e).message || "Couldn't load your songs.");
+			fail(/** @type {Error} */ (e).message || "Couldn't load your files.");
 		}
 		place();
 	};
@@ -338,7 +376,42 @@
 		(b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && ((b[1] >> 3) & 3) !== 1 && ((b[1] >> 1) & 3) === 1);
 
 	/**
-	 * Why a file can't be uploaded, or '' if it can.
+	 * The real type of an image from its first 12 bytes: 'jpg', 'png', 'webp', or '' for anything else.
+	 * @param {Uint8Array} b
+	 */
+	const imageType = (b) => {
+		const text = String.fromCharCode(...b);
+		if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) {
+			return 'jpg';
+		}
+		if (text.startsWith('\x89PNG')) {
+			return 'png';
+		}
+		return text.startsWith('RIFF') && text.slice(8, 12) === 'WEBP' ? 'webp' : '';
+	};
+
+	/**
+	 * Why an image can't be uploaded, or '' if it can. The game takes only .jpg, .jpeg, .png and .webp links.
+	 * @param {File} file
+	 */
+	const imageRefusal = async (file) => {
+		if (!/\.(jpe?g|png|webp)$/i.test(file.name) || (file.type && !/^image\/(jpeg|png|webp)$/.test(file.type))) {
+			return `"${file.name}" can't be a room image. Only .jpg, .jpeg, .png and .webp images can be uploaded.`;
+		}
+		if (!file.size) {
+			return 'That file is empty.';
+		}
+		if (file.size > MAX_IMAGE) {
+			return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; images can be at most 25 MB.`;
+		}
+		if (!imageType(new Uint8Array(await file.slice(0, 12).arrayBuffer()))) {
+			return `"${file.name}" is not a real JPEG, PNG or WEBP inside (only its name says so).`;
+		}
+		return '';
+	};
+
+	/**
+	 * Why a song can't be uploaded, or '' if it can.
 	 * @param {File} file
 	 */
 	const refusal = async (file) => {
@@ -379,12 +452,12 @@
 	};
 
 	/**
-	 * Sends one part with upload progress; answers its etag.
+	 * Sends bytes (a song's part, or a whole image) with upload progress; answers the JSON reply.
 	 * @param {string} path
 	 * @param {Blob} blob
 	 * @param {AbortSignal} signal
 	 * @param {(sent: number) => void} onSent bytes of this part sent so far
-	 * @returns {Promise<string>}
+	 * @returns {Promise<{ etag?: string, url?: string }>}
 	 */
 	const sendPart = (path, blob, signal, onSent) =>
 		new Promise((resolve, reject) => {
@@ -393,6 +466,7 @@
 			xhr.setRequestHeader('Authorization', `Bearer ${opts.key}`);
 			xhr.upload.onprogress = (e) => onSent(e.loaded);
 			xhr.onload = () => {
+				/** @type {{ etag?: string, url?: string, error?: string }} */
 				let answer = {};
 				try {
 					answer = JSON.parse(xhr.responseText);
@@ -400,7 +474,7 @@
 					/* not JSON: the status says enough */
 				}
 				if (xhr.status === 200) {
-					resolve(answer.etag);
+					resolve(answer);
 				} else {
 					reject(Object.assign(new Error(answer.error || `The upload address answered ${xhr.status}.`), { final: true }));
 				}
@@ -412,14 +486,15 @@
 		});
 
 	/**
-	 * Uploads a song in parts, showing progress, then shows its link.
+	 * Uploads a song in parts or an image in one go, showing progress, then shows its link.
 	 * @param {File} file
 	 */
 	const upload = async (file) => {
 		$('done').hidden = true;
 		$('copied').textContent = '';
 		fail('');
-		const why = await refusal(file);
+		const image = kind === 'images';
+		const why = await (image ? imageRefusal : refusal)(file);
 		if (why) {
 			fail(why);
 			return;
@@ -439,6 +514,12 @@
 		show(0);
 		place();
 		try {
+			if (image) {
+				const { url } = await sendPart(`/upload/image?name=${encodeURIComponent(file.name)}`, file, signal, show);
+				link.value = url || '';
+				$('done').hidden = false;
+				return;
+			}
 			started = await call('POST', '/upload', signal, { name: file.name, size: file.size });
 			const { key, uploadId, partSize } = /** @type {{ key: string, uploadId: string, partSize: number }} */ (started);
 			const parts = [];
@@ -446,7 +527,7 @@
 				const blob = file.slice(from, from + partSize);
 				for (let tries = 1; ; tries++) {
 					try {
-						const etag = await sendPart(`/upload/${key}/${n}?uploadId=${encodeURIComponent(uploadId)}`, blob, signal, (sent) =>
+						const { etag } = await sendPart(`/upload/${key}/${n}?uploadId=${encodeURIComponent(uploadId)}`, blob, signal, (sent) =>
 							show(from + sent),
 						);
 						parts.push({ partNumber: n, etag });

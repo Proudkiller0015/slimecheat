@@ -1,7 +1,7 @@
 {
 	"name": "bc-song-upload",
 	"private": true,
-	"description": "Song Upload: upload an mp3 from Bondage Club to your own storage and copy its link for room music.",
+	"description": "Room Uploads: upload an mp3 or a background image from Bondage Club to your own storage and copy its link for the room.",
 	"scripts": {
 		"format": "prettier --write song-upload.user.js test.js worker/src/index.js",
 		"check": "prettier --check song-upload.user.js test.js worker/src/index.js && eslint song-upload.user.js test.js worker/src/index.js && node --check song-upload.user.js",
