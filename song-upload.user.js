@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Room Uploads
 // @namespace    https://github.com/Proudkiller0015/bc-song-upload
-// @version      1.1.0
-// @description  Upload an mp3 or a background image to your own storage and copy its link, for Bondage Club room music and room images.
+// @version      1.2.0
+// @description  Upload an mp3 or a background image to your own storage and copy its link, for Bondage Club room music and room images. Also rolls dice with the result you pick.
 // @match        https://www.bondageprojects.elementfx.com/*
 // @match        https://bondageprojects.elementfx.com/*
 // @match        https://bondageprojects.com/*
@@ -87,7 +87,7 @@
 	<button id="btn" title="Room uploads (drag to move)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M7 9l5-5 5 5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg></button>
 	<div id="panel" role="dialog" aria-label="Room uploads">
 		<div class="head"><b>Room uploads</b><button class="round" id="gear" title="Settings">⚙</button><button class="round" id="close" title="Close">✕</button></div>
-		<div class="tabs" id="tabs"><button class="tab" data-view="songs">Songs</button><button class="tab" data-view="images">Images</button><button class="tab" data-view="files">My files</button></div>
+		<div class="tabs" id="tabs"><button class="tab" data-view="songs">Songs</button><button class="tab" data-view="images">Images</button><button class="tab" data-view="files">My files</button><button class="tab" data-view="dice">Dice</button></div>
 		<div id="main">
 			<div class="row"><button class="go" id="pick">Upload song</button><span class="hint" id="limits">mp3 only, up to 500 MB</span></div>
 			<input type="file" id="file" accept=".mp3,audio/mpeg" hidden>
@@ -97,6 +97,12 @@
 		<div id="files" hidden>
 			<div class="row"><span class="hint" id="used" style="flex:1"></span><button class="round" id="refresh" title="Refresh">↻</button></div>
 			<div id="list"></div>
+		</div>
+		<div id="dice" hidden>
+			<div class="row"><label style="flex:1">Dice<input type="text" id="dcount" value="1" inputmode="numeric"></label><label style="flex:1">Sides<input type="text" id="dsides" value="6" inputmode="numeric"></label></div>
+			<label>Result<input type="text" id="dresult" placeholder="e.g. 6, or 6,6,5 for three dice" spellcheck="false"></label>
+			<div class="row"><button class="go" id="droll">Roll</button><span class="hint" id="dsent"></span></div>
+			<span class="hint">Shows in the room exactly like /dice. Leave Result empty for a fair roll.</span>
 		</div>
 		<div id="setup" hidden>
 			<label>Upload address<input type="text" id="url" placeholder="https://song-upload.example.workers.dev" spellcheck="false"></label>
@@ -153,6 +159,7 @@
 		}
 		$('main').hidden = !uploadTab;
 		$('files').hidden = name !== 'files';
+		$('dice').hidden = name !== 'dice';
 		$('setup').hidden = name !== 'setup';
 		$('tabs').hidden = name === 'setup';
 		for (const tab of root.querySelectorAll('.tab')) {
@@ -223,6 +230,59 @@
 		}
 	});
 	$('refresh').addEventListener('click', () => listFiles());
+
+	/**
+	 * Rolls dice into the chat room the way the game's /dice does, with the result
+	 * typed in Result (one number per die, any order) or a fair roll if it's empty.
+	 */
+	$('droll').addEventListener('click', () => {
+		fail('');
+		$('dsent').textContent = '';
+		const field = (/** @type {string} */ id) => /** @type {HTMLInputElement} */ ($(id)).value.trim();
+		const count = Number(field('dcount'));
+		const sides = Number(field('dsides'));
+		if (!Number.isInteger(count) || count < 1 || count > 100) {
+			fail('Dice must be a whole number from 1 to 100.');
+			return;
+		}
+		if (!Number.isInteger(sides) || sides < 2 || sides > 100) {
+			fail('Sides must be a whole number from 2 to 100 (the game allows no other dice).');
+			return;
+		}
+		/** @type {number[]} */
+		let result;
+		if (field('dresult')) {
+			result = field('dresult').split(/[\s,+]+/).filter(Boolean).map(Number);
+			if (result.length !== count) {
+				fail(`Result needs ${count} number${count > 1 ? 's' : ''}, one per die.`);
+				return;
+			}
+			if (result.some((n) => !Number.isInteger(n) || n < 1 || n > sides)) {
+				fail(`Every number in Result must be from 1 to ${sides}.`);
+				return;
+			}
+		} else {
+			result = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
+		}
+		// The game's own globals, by name: DictionaryBuilder is a class, so it isn't on window.
+		/* global CurrentScreen, ServerSend, DictionaryBuilder, Player */
+		if (typeof CurrentScreen === 'undefined' || CurrentScreen !== 'ChatRoom' || typeof ServerSend !== 'function' || typeof DictionaryBuilder !== 'function') {
+			fail('Join a chat room first.');
+			return;
+		}
+		if (count > 1) {
+			result.sort((a, b) => a - b);
+		}
+		const total = result.reduce((a, b) => a + b, 0);
+		// The same message the game's /dice sends (CommandsDefault.js), so it reads the same to everyone.
+		const dictionary = new DictionaryBuilder()
+			.sourceCharacter(Player)
+			.text('DiceType', `${count}D${sides}`)
+			.text('DiceResult', count > 1 ? `${result} = ${total}` : String(total))
+			.build();
+		ServerSend('ChatRoomChat', { Content: 'ActionDice', Type: 'Action', Dictionary: dictionary });
+		$('dsent').textContent = `Rolled ${count}D${sides}: ${count > 1 ? `${result} = ${total}` : total}`;
+	});
 	$('savebtn').addEventListener('click', () => {
 		opts.url = /** @type {HTMLInputElement} */ ($('url')).value.trim().replace(/\/+$/, '');
 		opts.key = /** @type {HTMLInputElement} */ ($('key')).value.trim();
