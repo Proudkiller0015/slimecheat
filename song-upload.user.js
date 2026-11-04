@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Room Uploads
 // @namespace    https://github.com/Proudkiller0015/bc-song-upload
-// @version      1.2.0
+// @version      1.2.1
 // @description  Upload an mp3 or a background image to your own storage and copy its link, for Bondage Club room music and room images. Also rolls dice with the result you pick.
 // @match        https://www.bondageprojects.elementfx.com/*
 // @match        https://bondageprojects.elementfx.com/*
@@ -245,8 +245,9 @@
 			fail('Dice must be a whole number from 1 to 100.');
 			return;
 		}
-		if (!Number.isInteger(sides) || sides < 2 || sides > 100) {
-			fail('Sides must be a whole number from 2 to 100 (the game allows no other dice).');
+		// No top limit: the game's /dice stops at 100, but other extensions roll bigger dice and the room shows them fine.
+		if (!Number.isSafeInteger(sides) || sides < 2) {
+			fail('Sides must be a whole number, 2 or more.');
 			return;
 		}
 		/** @type {number[]} */
