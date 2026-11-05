@@ -1181,7 +1181,7 @@ async function browserChecks() {
 			(await page.evaluate(() => window.Player.Money)) === 1e99,
 			await text('moneydone'),
 		);
-		// !burn in the game's chat box, with a slot selected: burns that item, emotes, and the line is never sent.
+		// !burn in SlimeBeep's chat box, with a slot selected: burns that item, emotes, and is never sent (Enter or Send).
 		const fired = await page.evaluate(async () => {
 			const w = /** @type {any} */ (window);
 			const sent = [];
@@ -1202,10 +1202,13 @@ async function browserChecks() {
 				ServerSend: (/** @type {string} */ m, /** @type {any} */ d) => sent.push(`${m}:${d.Type}:${d.Content}`),
 				CharacterNickname: () => 'Sam',
 			});
-			const box = document.createElement('input');
-			box.id = 'InputChat';
-			document.body.append(box);
-			// The game's own handler would send the line.
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			const send = document.createElement('button');
+			send.id = 'sb-send';
+			document.body.append(box, send);
+			// SlimeBeep's own handlers would send the line.
+			send.addEventListener('click', () => gameSaw++);
 			box.addEventListener('keydown', (e) => {
 				if (e.key === 'Enter') {
 					gameSaw++;
@@ -1214,19 +1217,37 @@ async function browserChecks() {
 			box.value = '!burn';
 			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 			const r = { left: me.Appearance.length, sent: sent.join('|'), box: box.value, gameSaw };
+			// The Send button with !burn: burns too (another item), still never sent.
+			me.Appearance = [{ Asset: { Name: 'Cuffs', Description: 'Cuffs', Group: { Name: 'ItemMouth', AllowNone: true } } }];
+			box.value = '!burn';
+			send.click();
+			r.byButton = me.Appearance.length === 0 && gameSaw === 0 && box.value === '';
+			// Anything else goes through, and the game's own chat box is left alone.
 			box.value = 'hello';
 			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			send.click();
 			r.normal = gameSaw;
+			const game = document.createElement('input');
+			game.id = 'InputChat';
+			document.body.append(game);
+			game.value = '!burn';
+			me.Appearance = [gag];
+			game.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			r.gameChatIgnored = me.Appearance.length === 1 && game.value === '!burn';
 			box.remove();
+			send.remove();
+			game.remove();
 			return r;
 		});
 		check(
-			'!burn with a slot selected burns that item, saves, emotes, and is never sent; other lines go through',
+			'!burn in a SlimeBeep chat (Enter or Send) burns the selected item, saves, emotes, and is never sent; other lines go through; the game chat ignores it',
 			fired.left === 0 &&
 				fired.sent === 'update|sync|ChatRoomChat:Emote:sets the Ball Gag on fire and lets it burn away.' &&
 				fired.box === '' &&
 				fired.gameSaw === 0 &&
-				fired.normal === 1,
+				fired.byButton &&
+				fired.normal === 2 &&
+				fired.gameChatIgnored,
 			fired,
 		);
 		// A game function that throws: the error shows in SlimeCheat and nothing breaks.

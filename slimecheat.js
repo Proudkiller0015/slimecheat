@@ -950,7 +950,7 @@
 	};
 
 	// ---- !burn: the owner's "BC Fire Burn" (v4.1), its burn kept as written. Hidden: no button; with an item slot
-	// selected, type !burn in the game's chat box and press Enter. The line never reaches the room.
+	// selected in the game, type !burn in a SlimeBeep chat box and press Enter (or Send). It is never sent.
 	//
 	// DISCLAIMER from the mod maker: using !burn on another player requires their explicit consent. It can remove
 	// items others are wearing, locked or not, so only ever use it on someone who has clearly agreed to it.
@@ -1064,12 +1064,31 @@
 		};
 	})();
 	/* eslint-enable curly, prefer-template */
-	// Caught before the game's own chat handler (capture), so "!burn" is never sent.
+	// SlimeBeep's chat box (#sb-text) with "!burn" in it: caught before SlimeBeep sends it (capture), on Enter
+	// or on its Send button, so it never goes out as a beep or a group message.
+	const burnTyped = () => {
+		const box = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('sb-text'));
+		return box && box.value.trim().toLowerCase() === '!burn' ? box : null;
+	};
 	document.addEventListener(
 		'keydown',
 		(e) => {
-			const box = /** @type {HTMLInputElement | null} */ (e.target instanceof HTMLElement && e.target.id === 'InputChat' ? e.target : null);
-			if (!box || e.key !== 'Enter' || e.shiftKey || box.value.trim().toLowerCase() !== '!burn') {
+			const box = burnTyped();
+			if (!box || e.target !== box || e.key !== 'Enter' || e.shiftKey) {
+				return;
+			}
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			box.value = '';
+			fireBurn();
+		},
+		true,
+	);
+	document.addEventListener(
+		'click',
+		(e) => {
+			const box = burnTyped();
+			if (!box || !(e.target instanceof Element) || !e.target.closest('#sb-send')) {
 				return;
 			}
 			e.preventDefault();
