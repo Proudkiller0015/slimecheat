@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install SlimeCheat</title>
+<link rel="icon" href="icon-64.png">
+<style>
+	:root { --bg: #fff7fb; --card: #ffffff; --ink: #4a2340; --soft: #a0638a; --pink: #ff4fa3; --line: #ffd1e8; --mint: #9fe8ff; }
+	@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #141a33; --card: #1d2550; --ink: #dfe6ff; --soft: #8f9fd6; --pink: #ff6fb5; --line: #2f3b75; } }
+	:root[data-theme="dark"] { --bg: #141a33; --card: #1d2550; --ink: #dfe6ff; --soft: #8f9fd6; --pink: #ff6fb5; --line: #2f3b75; }
+	* { box-sizing: border-box; }
+	body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 "Trebuchet MS", "Segoe UI", sans-serif; }
+	main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+	header { text-align: center; margin-bottom: 24px; }
+	header img { width: 96px; height: 96px; }
+	h1 { margin: 8px 0 4px; font-size: 32px; }
+	header p { margin: 0; color: var(--soft); }
+	section { background: var(--card); border: 2px solid var(--line); border-radius: 20px; padding: 18px 20px; margin: 16px 0; }
+	h2 { margin: 0 0 8px; font-size: 20px; }
+	ol { margin: 8px 0 0; padding-left: 22px; }
+	li { margin: 6px 0; }
+	.bm { display: inline-block; padding: 10px 22px; border-radius: 999px; background: linear-gradient(135deg, #ff6fb5, #ff4fa3); color: #fff; font-weight: bold;
+		text-decoration: none; box-shadow: 0 3px 10px #ff4fa366; cursor: grab; }
+	.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+	button { font: inherit; border: 2px solid var(--pink); color: var(--pink); background: transparent; border-radius: 999px; padding: 7px 16px; cursor: pointer; }
+	textarea { width: 100%; height: 86px; resize: vertical; border: 2px solid var(--line); border-radius: 12px; padding: 8px; background: var(--bg); color: var(--ink);
+		font: 12px/1.4 Consolas, monospace; }
+	.hint { color: var(--soft); font-size: 14px; }
+	a { color: var(--pink); }
+	code { background: var(--bg); padding: 1px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main>
+	<header>
+		<img src="icon-128.png" alt="">
+		<h1>SlimeCheat</h1>
+		<p>A hack panel inside SlimeBeep for Bondage Club. Made by SlimeQueenSamantha.</p>
+	</header>
+
+	<section>
+		<h2>⚠ First: SlimeBeep</h2>
+		<p>SlimeCheat opens inside SlimeBeep's window, so you need <a href="https://proudkiller0015.github.io/slimebeep/install.html"><b>SlimeBeep</b></a>
+			(or turn it on in <a href="https://sidiousious.gitlab.io/bc-addon-loader/">FUSAM</a>). No SlimeBeep yet? The
+			<b>SlimeBeep + SlimeCheat</b> bookmark below loads both.</p>
+	</section>
+
+	<section>
+		<h2>🔖 Bookmark (no extension needed, phones too)</h2>
+		<ol>
+			<li>Show your bookmarks bar (<code>Ctrl</code> + <code>Shift</code> + <code>B</code>).</li>
+			<li>Drag one of these onto it:
+				<div class="row"><a class="bm" id="bm" href="#" title="Drag me to your bookmarks bar">💻 SlimeCheat</a>
+					<a class="bm" id="bm2" href="#" title="Drag me to your bookmarks bar">🫧💻 SlimeBeep + SlimeCheat</a></div>
+				<span class="hint">SlimeCheat alone if SlimeBeep already loads by itself (FUSAM or its userscript); both if not.</span>
+			</li>
+			<li>Open Bondage Club, log in, then click the bookmark. Open SlimeBeep and tap the slime-hacker tab (or type <code>!cheats</code> in a SlimeBeep chat).</li>
+		</ol>
+		<p class="hint">Click it each time you open the game. It always loads the newest SlimeCheat, so there's never anything to update. Clicking it twice does nothing extra.</p>
+		<details>
+			<summary class="hint" style="cursor:pointer">On a phone, or can't drag?</summary>
+			<ol class="hint">
+				<li>Bookmark this page (or any page), then edit that bookmark.</li>
+				<li>Name it <b>slimecheat</b> and paste one of these as its address (URL):</li>
+			</ol>
+			<p class="hint" style="margin-bottom:4px"><b>SlimeCheat</b>:</p>
+			<textarea id="code" readonly></textarea>
+			<div class="row"><button id="copy">📋 Copy</button><span class="hint" id="copied"></span></div>
+			<p class="hint" style="margin-bottom:4px"><b>SlimeBeep + SlimeCheat</b>:</p>
+			<textarea id="code2" readonly></textarea>
+			<div class="row"><button id="copy2">📋 Copy</button><span class="hint" id="copied2"></span></div>
+			<ol class="hint" start="3">
+				<li>In Bondage Club, type <b>slimecheat</b> in the address bar and tap the bookmark in the suggestions. (Phone browsers only run bookmarks this way, not from the bookmarks list.)</li>
+			</ol>
+		</details>
+	</section>
+
+	<section>
+		<h2>🐒 Userscript (loads by itself)</h2>
+		<p>With <a href="https://violentmonkey.github.io/">Violentmonkey</a> or <a href="https://www.tampermonkey.net/">Tampermonkey</a>:
+			<a href="https://raw.githubusercontent.com/Proudkiller0015/slimecheat/main/slimecheat.user.js"><b>install SlimeCheat</b></a>. It starts with the game every time, and updates itself.</p>
+	</section>
+
+	<p class="hint" style="text-align:center">Code and docs: <a href="https://github.com/Proudkiller0015/slimecheat">github.com/Proudkiller0015/slimecheat</a></p>
+</main>
+<script>
+	// The bookmarks: load the newest slimecheat.js (and slimebeep.js, for the second) from GitHub Pages into the game page, once.
+	const load = (flag, url) => "if(!window." + flag + "){var s=document.createElement('script');s.src='" + url + "?v='+Date.now();s.crossOrigin='anonymous';document.head.appendChild(s);}";
+	const cheat = load('SlimeCheat', 'https://proudkiller0015.github.io/slimecheat/slimecheat.js');
+	const beep = load('SlimeBeep', 'https://proudkiller0015.github.io/slimebeep/slimebeep.js');
+	const codes = { bm: 'javascript:(function(){' + cheat + '})();', bm2: 'javascript:(function(){' + beep + cheat + '})();' };
+	for (const [id, code] of Object.entries(codes)) {
+		const bm = document.getElementById(id);
+		bm.href = code;
+		// Clicked here instead of dragged: say what to do.
+		bm.addEventListener('click', (e) => { e.preventDefault(); alert('Drag this button onto your bookmarks bar, then click the bookmark while you are in Bondage Club.'); });
+	}
+	const wire = (box, button, out, code) => {
+		document.getElementById(box).value = code;
+		document.getElementById(button).addEventListener('click', async () => {
+			const o = document.getElementById(out);
+			try { await navigator.clipboard.writeText(code); o.textContent = 'Copied!'; }
+			catch (e) { document.getElementById(box).select(); o.textContent = 'Press Ctrl+C to copy.'; }
+		});
+	};
+	wire('code', 'copy', 'copied', codes.bm);
+	wire('code2', 'copy2', 'copied2', codes.bm2);
+</script>
+</body>
+</html>

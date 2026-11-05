@@ -11,7 +11,8 @@
 A hack panel for Bondage Club that lives in SlimeBeep's window (💻 tab, or type `!cheats` in a SlimeBeep chat)
 and follows SlimeBeep's theme.
 
-**[Install SlimeCheat](https://proudkiller0015.github.io/slimecheat/slimecheat.user.js)** (Tampermonkey or
+**[Install SlimeCheat](https://proudkiller0015.github.io/slimecheat/install.html)**: a bookmark (no extension, phones
+too) or a userscript ([direct link](https://proudkiller0015.github.io/slimecheat/slimecheat.user.js) for Tampermonkey or
 Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed script only loads
 `slimecheat.js` from this repo on every game load.
 
