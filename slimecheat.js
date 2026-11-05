@@ -902,8 +902,8 @@
 				return;
 			}
 			const amount = Number(value('money').replace(/[\s,$]/g, ''));
-			if (!Number.isInteger(amount) || amount < 0 || amount > 999999999) {
-				$('moneydone').textContent = 'A whole number from 0 to 999999999.';
+			if (!Number.isFinite(amount) || amount < 0) {
+				$('moneydone').textContent = 'A number, 0 or more (1e99 works too).';
 				return;
 			}
 			me.Money = amount;

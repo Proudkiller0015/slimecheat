@@ -1164,12 +1164,22 @@ async function browserChecks() {
 		check(
 			'Money shows what I have, refuses a bad amount, and sets and saves a good one',
 			before === '(you have $120)' &&
-				/whole number/.test(refused.text) &&
+				/A number, 0 or more/.test(refused.text) &&
 				refused.money === 120 &&
 				set.money === 5000 &&
 				set.calls === 'sync 5000' &&
 				set.now === '(you have $5000)',
 			[before, refused, set],
+		);
+		// No upper limit: 1e99 is taken as is.
+		await inPanel((h) => {
+			h.shadowRoot.getElementById('sc-money').value = '1e99';
+		});
+		await (await el('setmoney')).click();
+		check(
+			'Money has no upper limit (1e99 is set as is)',
+			(await page.evaluate(() => window.Player.Money)) === 1e99,
+			await text('moneydone'),
 		);
 		// A game function that throws: the error shows in SlimeCheat and nothing breaks.
 		await page.evaluate(() => {
