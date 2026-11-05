@@ -176,7 +176,7 @@
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sb-name">👻 Invisible</div>
-					<div class="sb-hint">Hides all of you with the game's own Script item (like ULTRAbc's /invisible). Players who block scripts still see you.</div>
+					<div class="sb-hint">Hides all of you from everyone in the room with the game's own Script item (like ULTRAbc's /invisible). Needs Settings › Scripts › Hide › Self.</div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-invis">Go invisible</button><button class="sb-pill" id="sc-vis">Visible again</button><span class="sb-hint" id="sc-invisdone"></span></div>
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
