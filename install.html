@@ -32,6 +32,7 @@
 		.pick label { cursor: pointer; }
 		button.big { background: var(--pink); color: #fff; font-weight: bold; padding: 9px 20px; }
 		ul { margin: 4px 0; padding-left: 20px; }
+	.warn { margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 2px solid var(--pink); font-size: 14px; }
 	h3 { margin: 14px 0 4px; font-size: 16px; }
 	a { color: var(--pink); }
 	code { background: var(--bg); padding: 1px 6px; border-radius: 6px; }
@@ -67,11 +68,12 @@
 		<ol>
 			<li><button class="big" id="copy">📋 Copy the bookmark</button> <span class="hint" id="copied"></span></li>
 			<li>Make a new bookmark: on a computer press <code>Ctrl</code> + <code>D</code> on this page; on a phone tap ☆ (or ⋮ › ☆).</li>
-			<li>Edit it: name it <b>slimecheat</b>, and replace its address (URL) with what you copied. Save.</li>
+			<li>Edit it (on a phone: ⋮ › Bookmarks, then the bookmark's ⋮ › Edit): name it <b>slimecheat</b>, and replace its address (URL) with what you copied. Save.
+				<div class="warn">⚠ The address must start with <code>javascript:</code>. Some browsers (Chrome) drop that word when you paste; if it's missing, type <code>javascript:</code> back at the very start. Without it the browser just searches for the code.</div></li>
 			<li>Open Bondage Club and log in, then open the bookmark:
 				<ul>
 					<li>Computer: click it in your bookmarks.</li>
-					<li>Phone: type <b>slimecheat</b> in the address bar and tap the bookmark in the suggestions (phones only run bookmarks this way).</li>
+					<li>Phone: type <b>slimecheat</b> in the address bar and tap the <b>bookmark</b> in the suggestions, not a search (phones only run bookmarks this way).</li>
 				</ul>
 			</li>
 			<li>Open SlimeBeep and tap the slime-hacker tab (or type <code>!cheats</code> in a SlimeBeep chat).</li>
