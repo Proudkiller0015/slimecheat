@@ -3,8 +3,8 @@
 	"private": true,
 	"description": "Room Uploads: upload an mp3 or a background image from Bondage Club to your own storage and copy its link for the room.",
 	"scripts": {
-		"format": "prettier --write slimecheat.user.js test.js worker/src/index.js",
-		"check": "prettier --check slimecheat.user.js test.js worker/src/index.js && eslint slimecheat.user.js test.js worker/src/index.js && node --check slimecheat.user.js",
+		"format": "prettier --write slimecheat.js test.js worker/src/index.js",
+		"check": "prettier --check slimecheat.js test.js worker/src/index.js && eslint slimecheat.js test.js worker/src/index.js && node --check slimecheat.js",
 		"test": "node test.js"
 	},
 	"devDependencies": {

@@ -572,7 +572,7 @@ async function imageChecks() {
  * The userscript in headless Chrome on a page at the game's address.
  */
 async function browserChecks() {
-	const script = fs.readFileSync(path.join(__dirname, 'slimecheat.user.js'), 'utf8');
+	const script = fs.readFileSync(path.join(__dirname, 'slimecheat.js'), 'utf8');
 	check('the userscript hooks nothing in the game (no bcModSdk, no socket handlers)', !/\b(ServerSocket|bcModSdk)\b/.test(script));
 	const files = {
 		wav: path.join(tmp, 'song.wav'),

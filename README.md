@@ -12,7 +12,8 @@ A hack panel for Bondage Club that lives in SlimeBeep's window (💻 tab, or typ
 and follows SlimeBeep's theme.
 
 **[Install SlimeCheat](https://proudkiller0015.github.io/slimecheat/slimecheat.user.js)** (Tampermonkey or
-Violentmonkey).
+Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed script only loads
+`slimecheat.js` from this repo on every game load.
 
 - **🎵 Songs / 🖼 Images**: upload an mp3 (up to 500 MB) or a room background (.jpg, .png, .webp, up to 25 MB)
   and get a direct link to paste into your room's music or Image URL. Everyone in the room hears and sees
