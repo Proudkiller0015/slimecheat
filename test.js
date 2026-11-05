@@ -511,7 +511,25 @@ async function imageChecks() {
 		}
 	};
 	const tooBig = await putSafe(padded(pics.png, 25 * MB + 1));
-	check('an image over 25 MB: 413', tooBig === 413, tooBig);
+	check('an image over 25 MB in one request: 413 (those go in parts)', tooBig === 413, tooBig);
+	const bigImg = await upload('big room.png', padded(pics.png, 60 * MB));
+	check('a 60 MB image uploads in parts, its link ends in .png', bigImg.res.ok && /\.png$/.test(bigImg.url), [
+		bigImg.res.status,
+		bigImg.url,
+	]);
+	const bigServed = bigImg.url ? await fetch(bigImg.url, { method: 'HEAD' }) : null;
+	check(
+		'...and is served as image/png',
+		!!bigServed && bigServed.headers.get('content-type') === 'image/png',
+		bigServed && bigServed.headers.get('content-type'),
+	);
+	const tooBigParts = await call('POST', '/upload', { key: KEY, body: { name: 'huge.png', size: 100 * MB + 1 } });
+	check('an image over 100 MB: 413', tooBigParts.status === 413, tooBigParts.status);
+	const fakeBig = await upload('fake.png', mp3(30 * MB));
+	check('a big "png" that is really an mp3: 415 at its first part', fakeBig.res.status === 415, fakeBig.res.status);
+	if (bigImg.url) {
+		await call('DELETE', `/upload/files/${bigImg.url.split('/').pop()}`, { key: KEY });
+	}
 	const atLimit = await putImage('limit.png', padded(pics.png, 25 * MB));
 	check('an image of exactly 25 MB uploads', atLimit.res.ok, atLimit.res.status);
 	const emptyImg = await putSafe(Buffer.alloc(0));
@@ -588,7 +606,7 @@ async function browserChecks() {
 	fs.writeFileSync(files.gif, Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64'));
 	fs.writeFileSync(files.fakePng, mp3(2000));
 	fs.writeFileSync(files.png, pics.png);
-	fs.writeFileSync(files.hugePng, padded(pics.png, 25 * MB + 1));
+	fs.writeFileSync(files.hugePng, padded(pics.png, 100 * MB + 1));
 	const riff = Buffer.alloc(2000);
 	riff.write('RIFF');
 	fs.writeFileSync(files.wav, riff);
@@ -807,9 +825,9 @@ async function browserChecks() {
 		await tab('Images');
 		const accept = await inPanel((h) => h.shadowRoot.getElementById('sc-file').accept);
 		check(
-			'the Images tab: Upload image, jpg/png/webp up to 25 MB, the old song link hidden',
+			'the Images tab: Upload image, jpg/png/webp up to 100 MB, the old song link hidden',
 			(await text('pick')) === '🖼 Upload image' &&
-				/jpg, png or webp, up to 25 MB/.test(await text('limits')) &&
+				/jpg, png or webp, up to 100 MB/.test(await text('limits')) &&
 				accept.includes('.webp') &&
 				!accept.includes('.mp3') &&
 				!(await visible('done')),
@@ -821,7 +839,7 @@ async function browserChecks() {
 			/not a real JPEG, PNG or WEBP/.test(await pick(files.fakePng)),
 			await text('err'),
 		);
-		check('an image over 25 MB is refused', /at most 25 MB/.test(await pick(files.hugePng)), await text('err'));
+		check('an image over 100 MB is refused', /at most 100 MB/.test(await pick(files.hugePng)), await text('err'));
 		check('room background.png uploads', !(await pick(files.png)), await text('err'));
 		const imgLink = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
 		check('the image link shows and ends in .png', new RegExp(`^${BASE}/[0-9a-f]{32}\\.png$`).test(imgLink), imgLink);

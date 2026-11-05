@@ -26,7 +26,9 @@
 	/** Largest song the storage takes. */
 	const MAX_SONG = 500 * 1024 * 1024;
 	/** Largest image the storage takes. */
-	const MAX_IMAGE = 25 * 1024 * 1024;
+	const MAX_IMAGE = 100 * 1024 * 1024;
+	/** Images up to this go in one request; bigger ones in parts, like songs. */
+	const ONE_SHOT = 25 * 1024 * 1024;
 	/** Tries per part before the upload gives up. */
 	const TRIES = 3;
 	/** What each upload page takes. */
@@ -34,7 +36,7 @@
 		songs: { pick: '🎵 Upload song', hint: 'mp3 only, up to 500 MB', accept: '.mp3,audio/mpeg' },
 		images: {
 			pick: '🖼 Upload image',
-			hint: 'jpg, png or webp, up to 25 MB',
+			hint: 'jpg, png or webp, up to 100 MB',
 			accept: '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp',
 		},
 	};
@@ -408,7 +410,7 @@
 				return 'That file is empty.';
 			}
 			if (file.size > MAX_IMAGE) {
-				return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; images can be at most 25 MB.`;
+				return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; images can be at most 100 MB.`;
 			}
 			if (!imageType(new Uint8Array(await file.slice(0, 12).arrayBuffer()))) {
 				return `"${file.name}" is not a real JPEG, PNG or WEBP inside (only its name says so).`;
@@ -469,7 +471,7 @@
 				guard(listKind);
 			};
 			try {
-				if (image) {
+				if (image && file.size <= ONE_SHOT) {
 					const { url } = await sendPart(`/upload/image?name=${encodeURIComponent(file.name)}`, file, signal, show);
 					done(url || '');
 					return;

@@ -8,7 +8,7 @@
  * owners (OWNERS) keep files 5 days and can list and delete everyone's. Other players' files last
  * OTHER_LIFE, count toward OTHER_CAP each, and are the first to go when the bucket is full.
  *
- * POST   /upload                       { name, size } -> { key, uploadId, partSize }   (key needed)
+ * POST   /upload                       { name, size } -> { key, uploadId, partSize }   (an mp3, or an image over 25 MB)
  * PUT    /upload/<key>/<part>?uploadId  the part's bytes -> { etag }                   (key needed)
  * POST   /upload/<key>/done?uploadId    { parts } -> { url }                            (key needed)
  * DELETE /upload/<key>?uploadId         cancels an upload                               (key needed)
@@ -26,8 +26,10 @@ const MB = 1024 * 1024;
 const PART = 50 * MB;
 /** Largest song accepted. */
 const MAX_SONG = 500 * MB;
-/** Largest image accepted. */
-const MAX_IMAGE = 25 * MB;
+/** Largest image accepted (bigger than ONE_SHOT: sent in parts, like songs). */
+const MAX_IMAGE = 100 * MB;
+/** Largest image taken in one request (PUT /upload/image); the Worker reads it whole to check it. */
+const ONE_SHOT = 25 * MB;
 /** How long a started upload counts toward the bucket's size (the lifecycle rule aborts it after a day). */
 const UPLOAD_LIFE = 24 * 60 * 60 * 1000;
 /** How long a file is kept (the lifecycle rule in lifecycle.json deletes it then). */
@@ -410,14 +412,19 @@ async function start(request, env, cors, who) {
 	/** @type {{ name?: unknown, size?: unknown }} */
 	const body = await request.json().catch(() => ({}));
 	const size = Number(body.size);
-	if (typeof body.name !== 'string' || !/\.mp3$/i.test(body.name)) {
-		return json({ error: 'Only .mp3 files can be uploaded.' }, 415, cors);
+	const song = typeof body.name === 'string' && /\.mp3$/i.test(body.name);
+	const image = typeof body.name === 'string' && IMAGE_NAME.test(body.name);
+	if (!song && !image) {
+		return json({ error: 'Only .mp3 songs and .jpg, .jpeg, .png or .webp images can be uploaded.' }, 415, cors);
 	}
 	if (!Number.isInteger(size) || size < 1) {
 		return json({ error: 'The file is empty.' }, 400, cors);
 	}
-	if (size > MAX_SONG) {
+	if (song && size > MAX_SONG) {
 		return json({ error: 'Songs can be at most 500 MB.' }, 413, cors);
+	}
+	if (image && size > MAX_IMAGE) {
+		return json({ error: `Images can be at most ${MAX_IMAGE / MB} MB.` }, 413, cors);
 	}
 	if (!(await hasQuota(env, who, size))) {
 		return json({ error: QUOTA_FULL }, 413, cors);
@@ -425,9 +432,13 @@ async function start(request, env, cors, who) {
 	if (!(await makeRoom(env, size))) {
 		return json({ error: 'Other uploads in progress fill the storage. Try again once they finish.' }, 507, cors);
 	}
-	const key = `${randomName()}.mp3`;
+	// An image's link ends in the extension its name says; its first part must really be that type.
+	const ext = song
+		? 'mp3'
+		: /** @type {'jpg' | 'png' | 'webp'} */ (String(body.name).toLowerCase().split('.').pop().replace('jpeg', 'jpg'));
+	const key = `${randomName()}.${ext}`;
 	const multipart = await env.SONGS.createMultipartUpload(key, {
-		httpMetadata: { contentType: 'audio/mpeg' },
+		httpMetadata: { contentType: song ? 'audio/mpeg' : IMAGE_TYPES[ext] },
 		customMetadata: { name: cleanName(body.name), ...byMeta(who) },
 	});
 	await env.SONGS.put(PENDING + key, null, { customMetadata: { size: String(size), uploadId: multipart.uploadId, ...byMeta(who) } });
@@ -473,9 +484,13 @@ async function putPart(request, env, cors, key, uploadId, n) {
 	let bytes = request.body;
 	if (n === 1) {
 		bytes = await request.arrayBuffer();
-		if (!isMp3(new Uint8Array(bytes, 0, Math.min(4, bytes.byteLength)))) {
+		if (key.endsWith('.mp3') && !isMp3(new Uint8Array(bytes, 0, Math.min(4, bytes.byteLength)))) {
 			await cancel(env, key, uploadId);
 			return json({ error: 'This file is not an mp3. Only mp3 files can be uploaded.' }, 415, cors);
+		}
+		if (!key.endsWith('.mp3') && imageType(new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength))) !== key.split('.').pop()) {
+			await cancel(env, key, uploadId);
+			return json({ error: 'This file is not a real JPEG, PNG or WEBP image of the type its name says.' }, 415, cors);
 		}
 	}
 	const part = await env.SONGS.resumeMultipartUpload(key, uploadId).uploadPart(n, bytes);
@@ -509,7 +524,7 @@ async function finish(request, env, cors, key, uploadId) {
 }
 
 /**
- * Takes an image in one request: a name the game accepts, at most 25 MB, and bytes that really are a
+ * Takes an image in one request: a name the game accepts, at most ONE_SHOT (bigger ones go in parts), and bytes that really are a
  * JPEG, PNG or WEBP. The link ends in the extension of the real type, whatever the name said.
  * @param {Request} request
  * @param {Env} env
@@ -524,8 +539,8 @@ async function putImage(request, env, cors, name, who) {
 	if (!Number.isInteger(size) || size < 1 || !request.body) {
 		return json({ error: 'The file is empty.' }, 400, cors);
 	}
-	if (size > MAX_IMAGE) {
-		return json({ error: 'Images can be at most 25 MB.' }, 413, cors);
+	if (size > ONE_SHOT) {
+		return json({ error: `Images over ${ONE_SHOT / MB} MB go up in parts (POST /upload).` }, 413, cors);
 	}
 	const bytes = await request.arrayBuffer();
 	const type = imageType(new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength)));
@@ -615,7 +630,7 @@ async function upload(request, env, cors, path, query, who) {
 		await env.SONGS.delete(part);
 		return json({ ok: true }, 200, cors);
 	}
-	if (!KEY_RE.test(key) || !key.endsWith('.mp3') || !uploadId) {
+	if (!KEY_RE.test(key) || !uploadId) {
 		return json({ error: 'Not found' }, 404, cors);
 	}
 	// An upload in progress is only touched by whoever started it.
