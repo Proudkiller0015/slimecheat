@@ -27,6 +27,10 @@
 	textarea { width: 100%; height: 86px; resize: vertical; border: 2px solid var(--line); border-radius: 12px; padding: 8px; background: var(--bg); color: var(--ink);
 		font: 12px/1.4 Consolas, monospace; }
 	.hint { color: var(--soft); font-size: 14px; }
+		.pick { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0; font-weight: bold; }
+		.pick label { cursor: pointer; }
+		button.big { background: var(--pink); color: #fff; font-weight: bold; padding: 9px 20px; }
+		ul { margin: 4px 0; padding-left: 20px; }
 	a { color: var(--pink); }
 	code { background: var(--bg); padding: 1px 6px; border-radius: 6px; }
 </style>
@@ -48,31 +52,34 @@
 
 	<section>
 		<h2>🔖 Bookmark (no extension needed, phones too)</h2>
+		<p class="hint">Pick one: <b>SlimeCheat</b> if SlimeBeep already loads by itself (FUSAM or its userscript), or
+			<b>SlimeBeep + SlimeCheat</b> if not.</p>
+		<div class="pick">
+			<label><input type="radio" name="which" value="bm" checked> 💻 SlimeCheat</label>
+			<label><input type="radio" name="which" value="bm2"> 🫧💻 SlimeBeep + SlimeCheat</label>
+		</div>
 		<ol>
-			<li>Show your bookmarks bar (<code>Ctrl</code> + <code>Shift</code> + <code>B</code>).</li>
-			<li>Drag one of these onto it:
-				<div class="row"><a class="bm" id="bm" href="#" title="Drag me to your bookmarks bar">💻 SlimeCheat</a>
-					<a class="bm" id="bm2" href="#" title="Drag me to your bookmarks bar">🫧💻 SlimeBeep + SlimeCheat</a></div>
-				<span class="hint">SlimeCheat alone if SlimeBeep already loads by itself (FUSAM or its userscript); both if not.</span>
+			<li><button class="big" id="copy">📋 Copy the bookmark</button> <span class="hint" id="copied"></span></li>
+			<li>Make a new bookmark: on a computer press <code>Ctrl</code> + <code>D</code> on this page; on a phone tap ☆ (or ⋮ › ☆).</li>
+			<li>Edit it: name it <b>slimecheat</b>, and replace its address (URL) with what you copied. Save.</li>
+			<li>Open Bondage Club and log in, then open the bookmark:
+				<ul>
+					<li>Computer: click it in your bookmarks.</li>
+					<li>Phone: type <b>slimecheat</b> in the address bar and tap the bookmark in the suggestions (phones only run bookmarks this way).</li>
+				</ul>
 			</li>
-			<li>Open Bondage Club, log in, then click the bookmark. Open SlimeBeep and tap the slime-hacker tab (or type <code>!cheats</code> in a SlimeBeep chat).</li>
+			<li>Open SlimeBeep and tap the slime-hacker tab (or type <code>!cheats</code> in a SlimeBeep chat).</li>
 		</ol>
-		<p class="hint">Click it each time you open the game. It always loads the newest SlimeCheat, so there's never anything to update. Clicking it twice does nothing extra.</p>
+		<p class="hint">Open it each time you open the game. It always loads the newest SlimeCheat, so there's never anything to update. Opening it twice does nothing extra.</p>
 		<details>
-			<summary class="hint" style="cursor:pointer">On a phone, or can't drag?</summary>
-			<ol class="hint">
-				<li>Bookmark this page (or any page), then edit that bookmark.</li>
-				<li>Name it <b>slimecheat</b> and paste one of these as its address (URL):</li>
-			</ol>
-			<p class="hint" style="margin-bottom:4px"><b>SlimeCheat</b>:</p>
+			<summary class="hint" style="cursor:pointer">Or drag it (computer)</summary>
+			<p class="hint">Show your bookmarks bar (<code>Ctrl</code> + <code>Shift</code> + <code>B</code>) and drag this button onto it:</p>
+			<div class="row"><a class="bm" id="drag" href="#" title="Drag me to your bookmarks bar">💻 SlimeCheat</a></div>
+		</details>
+		<details>
+			<summary class="hint" style="cursor:pointer">Copy didn't work?</summary>
+			<p class="hint">Select all of this and copy it by hand:</p>
 			<textarea id="code" readonly></textarea>
-			<div class="row"><button id="copy">📋 Copy</button><span class="hint" id="copied"></span></div>
-			<p class="hint" style="margin-bottom:4px"><b>SlimeBeep + SlimeCheat</b>:</p>
-			<textarea id="code2" readonly></textarea>
-			<div class="row"><button id="copy2">📋 Copy</button><span class="hint" id="copied2"></span></div>
-			<ol class="hint" start="3">
-				<li>In Bondage Club, type <b>slimecheat</b> in the address bar and tap the bookmark in the suggestions. (Phone browsers only run bookmarks this way, not from the bookmarks list.)</li>
-			</ol>
 		</details>
 	</section>
 
@@ -90,22 +97,26 @@
 	const cheat = load('SlimeCheat', 'https://proudkiller0015.github.io/slimecheat/slimecheat.js');
 	const beep = load('SlimeBeep', 'https://proudkiller0015.github.io/slimebeep/slimebeep.js');
 	const codes = { bm: 'javascript:(function(){' + cheat + '})();', bm2: 'javascript:(function(){' + beep + cheat + '})();' };
-	for (const [id, code] of Object.entries(codes)) {
-		const bm = document.getElementById(id);
-		bm.href = code;
-		// Clicked here instead of dragged: say what to do.
-		bm.addEventListener('click', (e) => { e.preventDefault(); alert('Drag this button onto your bookmarks bar, then click the bookmark while you are in Bondage Club.'); });
-	}
-	const wire = (box, button, out, code) => {
-		document.getElementById(box).value = code;
-		document.getElementById(button).addEventListener('click', async () => {
-			const o = document.getElementById(out);
-			try { await navigator.clipboard.writeText(code); o.textContent = 'Copied!'; }
-			catch (e) { document.getElementById(box).select(); o.textContent = 'Press Ctrl+C to copy.'; }
-		});
+	const names = { bm: '💻 SlimeCheat', bm2: '🫧💻 SlimeBeep + SlimeCheat' };
+	const box = document.getElementById('code');
+	const drag = document.getElementById('drag');
+	const which = () => document.querySelector('input[name="which"]:checked').value;
+	// The copy box and the drag button follow the choice.
+	const show = () => {
+		box.value = codes[which()];
+		drag.href = codes[which()];
+		drag.textContent = names[which()];
+		document.getElementById('copied').textContent = '';
 	};
-	wire('code', 'copy', 'copied', codes.bm);
-	wire('code2', 'copy2', 'copied2', codes.bm2);
+	for (const r of document.querySelectorAll('input[name="which"]')) r.addEventListener('change', show);
+	show();
+	// Clicked here instead of dragged: say what to do.
+	drag.addEventListener('click', (e) => { e.preventDefault(); alert('Drag this button onto your bookmarks bar, then click the bookmark while you are in Bondage Club.'); });
+	document.getElementById('copy').addEventListener('click', async () => {
+		const out = document.getElementById('copied');
+		try { await navigator.clipboard.writeText(codes[which()]); out.textContent = '✓ Copied! Now step 2.'; }
+		catch (e) { box.closest('details').open = true; box.select(); out.textContent = 'Copy it by hand from the box below.'; }
+	});
 </script>
 </body>
 </html>
