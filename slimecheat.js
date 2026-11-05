@@ -10,10 +10,8 @@
 	const VERSION = '2.0.0';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
-	/** localStorage key of the settings. */
-	const KEY = 'songUpload.options';
-	/** The upload address used when none is set. */
-	const DEFAULT_URL = 'https://song-upload.slimebeep-relay.workers.dev';
+	/** Where uploads go (tests point it at a local copy). */
+	const BASE = typeof w.SlimeCheatServer === 'string' ? w.SlimeCheatServer : 'https://song-upload.slimebeep-relay.workers.dev';
 	/** Who SlimeBeep proofs are made for (the Worker checks the same name). */
 	const AUDIENCE = 'slimecheat';
 	/** Where to get SlimeBeep. */
@@ -38,15 +36,12 @@
 		},
 	};
 
-	/** @type {{ url: string, key: string }} */
-	const opts = { url: '', key: '' };
+	// Room Uploads kept an address and an upload key here; SlimeCheat signs in through SlimeBeep instead.
 	try {
-		Object.assign(opts, JSON.parse(localStorage.getItem(KEY) || '{}'));
+		localStorage.removeItem('songUpload.options');
 	} catch (e) {
-		/* broken settings: start fresh */
+		/* no storage: nothing to clear */
 	}
-	opts.url = opts.url || DEFAULT_URL;
-	const save = () => localStorage.setItem(KEY, JSON.stringify({ url: opts.url, key: opts.key }));
 
 	/** SlimeBeep's API, when it is there. */
 	const slimeBeep = () => {
@@ -56,11 +51,8 @@
 	/** The game's player, or null before login. */
 	const player = () => (typeof w.Player === 'object' && w.Player && w.Player.MemberNumber ? w.Player : null);
 
-	/** The Authorization header: the upload key when one is set, else a fresh SlimeBeep proof. */
+	/** The Authorization header: a fresh SlimeBeep proof. */
 	const authHeader = async () => {
-		if (opts.key) {
-			return `Bearer ${opts.key}`;
-		}
 		const api = slimeBeep();
 		const proof = api ? await api.proveIdentity(AUDIENCE) : null;
 		if (!proof) {
@@ -148,7 +140,7 @@
 			<div class="sc-tabs" id="sc-tabs">
 				<button class="sb-pill" data-page="songs">🎵 Songs</button><button class="sb-pill" data-page="images">🖼 Images</button>
 				<button class="sb-pill" data-page="files">📁 My files</button><button class="sb-pill" data-page="dice">🎲 Dice</button>
-				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="setup" title="Settings">⚙</button>
+				<button class="sb-pill" data-page="cheats">🔓 Cheats</button>
 			</div>
 			<div class="sc-page" id="sc-upload">
 				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 only, up to 500 MB</span></div>
@@ -179,13 +171,8 @@
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-allitems">Unlock all items</button><span class="sb-hint" id="sc-itemsdone"></span></div>
 				</div>
 			</div>
-			<div class="sc-page" id="sc-setup" hidden>
-				<label>Upload address<input class="sb-search" id="sc-url" spellcheck="false"></label>
-				<label>Upload key<input class="sb-search" type="password" id="sc-key" autocomplete="off"></label>
-				<span class="sb-hint">You're signed in through SlimeBeep, so leave the key empty. Kept in this browser only.</span>
-				<div class="sc-line"><button class="sb-go" id="sc-save">Save</button><span class="sb-hint">SlimeCheat ${VERSION}</span></div>
-			</div>
 			<div class="sc-err" id="sc-err" hidden></div>
+			<div class="sb-hint" style="text-align:right;margin-top:6px">SlimeCheat ${VERSION}</div>
 		</div>`;
 
 		/**
@@ -235,7 +222,7 @@
 		const onClick = (id, fn) => $(id).addEventListener('click', () => guard(fn));
 
 		/**
-		 * Shows a page: 'songs', 'images', 'files', 'dice', 'cheats' or 'setup'.
+		 * Shows a page: 'songs', 'images', 'files', 'dice' or 'cheats'.
 		 * @param {string} name
 		 */
 		const page = (name) => {
@@ -249,16 +236,13 @@
 				$('done').hidden = true;
 			}
 			$('upload').hidden = !upload;
-			for (const p of ['files', 'dice', 'cheats', 'setup']) {
+			for (const p of ['files', 'dice', 'cheats']) {
 				$(p).hidden = name !== p;
 			}
 			for (const tab of root.querySelectorAll('#sc-tabs [data-page]')) {
 				tab.classList.toggle('on', /** @type {HTMLElement} */ (tab).dataset.page === name);
 			}
-			if (name === 'setup') {
-				/** @type {HTMLInputElement} */ ($('url')).value = opts.url;
-				/** @type {HTMLInputElement} */ ($('key')).value = opts.key;
-			} else if (name === 'files') {
+			if (name === 'files') {
 				guard(listFiles);
 			} else if (name === 'cheats') {
 				guard(fillParts);
@@ -269,18 +253,6 @@
 			if (tab instanceof HTMLElement) {
 				page(tab.dataset.page || 'songs');
 			}
-		});
-
-		// ---- Settings
-		onClick('save', () => {
-			opts.url = value('url').replace(/\/+$/, '') || DEFAULT_URL;
-			opts.key = value('key');
-			if (!/^https?:\/\/[^/]+/.test(opts.url)) {
-				fail('The upload address must start with https://');
-				return;
-			}
-			save();
-			page(kind);
 		});
 
 		// ---- Uploads
@@ -342,7 +314,7 @@
 		 */
 		const call = async (method, path, signal, body) => {
 			const auth = await authHeader();
-			const res = await fetch(opts.url + path, {
+			const res = await fetch(BASE + path, {
 				method,
 				signal,
 				headers: { Authorization: auth, 'Content-Type': 'application/json' },
@@ -367,7 +339,7 @@
 			const auth = await authHeader();
 			return new Promise((resolve, reject) => {
 				const xhr = new XMLHttpRequest();
-				xhr.open('PUT', opts.url + path);
+				xhr.open('PUT', BASE + path);
 				xhr.setRequestHeader('Authorization', auth);
 				xhr.upload.onprogress = (e) => onSent(e.loaded);
 				xhr.onload = () => {

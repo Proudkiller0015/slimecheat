@@ -4,7 +4,7 @@
 	"description": "Takes mp3 and image uploads with the upload key into R2 and serves them to anyone.",
 	"scripts": {
 		"dev": "wrangler dev --port 8788",
-		"dev:test": "node -e \"require('fs').rmSync('.wrangler/test', { recursive: true, force: true })\" && wrangler dev --persist-to .wrangler/test --port 8788 --var UPLOAD_KEY:test-upload-key-0123456789 --var CAP_BYTES:400000000",
+		"dev:test": "node -e \"require('fs').rmSync('.wrangler/test', { recursive: true, force: true })\" && wrangler dev --persist-to .wrangler/test --port 8788 --var UPLOAD_KEY:test-upload-key-0123456789 --var CAP_BYTES:400000000 --var OWNERS:255659,4242",
 		"deploy": "wrangler deploy"
 	},
 	"devDependencies": {

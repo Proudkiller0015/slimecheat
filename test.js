@@ -644,10 +644,38 @@ async function browserChecks() {
 						/** @type {any} */ (window).added = p;
 						return { open() {}, remove() {} };
 					},
-					proveIdentity: async () => null,
+					// Like SlimeBeep's: an ECDSA P-256 proof of "slimebeep-proof|<audience>|<member>|<time>"; null until logged in.
+					async proveIdentity(/** @type {string} */ audience) {
+						const w = /** @type {any} */ (window);
+						if (!w.loggedIn) {
+							return null;
+						}
+						w.sbKey = w.sbKey || (await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']));
+						const jwk = await crypto.subtle.exportKey('jwk', w.sbKey.publicKey);
+						const time = Date.now();
+						const raw = await crypto.subtle.sign(
+							{ name: 'ECDSA', hash: 'SHA-256' },
+							w.sbKey.privateKey,
+							new TextEncoder().encode(`slimebeep-proof|${audience}|4242|${time}`),
+						);
+						const sig = btoa(String.fromCharCode(...new Uint8Array(raw)))
+							.replace(/\+/g, '-')
+							.replace(/\//g, '_')
+							.replace(/=+$/, '');
+						w.proofs = (w.proofs || 0) + 1;
+						return { memberNumber: 4242, time, pub: { x: jwk.x, y: jwk.y }, sig, rk: null };
+					},
 				},
 			};
+			// Old Room Uploads settings (an address ending in /, and a key): SlimeCheat ignores and clears them.
+			localStorage.setItem(
+				'songUpload.options',
+				JSON.stringify({ url: 'https://song-upload.slimebeep-relay.workers.dev/', key: 'old-key' }),
+			);
 		});
+		await page.evaluate((base) => {
+			/** @type {any} */ (window).SlimeCheatServer = base;
+		}, BASE);
 		await page.addScriptTag({ content: script });
 		await page.waitForFunction(() => !!document.getElementById('su-host').shadowRoot.getElementById('sc-root'));
 		const added = await page.evaluate(() => ({ id: window.added.id, icon: window.added.icon, title: window.added.title }));
@@ -677,31 +705,16 @@ async function browserChecks() {
 						.click(),
 				name,
 			);
-		check('the panel opens on Songs', await visible('pick'));
-		await tab('⚙');
-		check('⚙ shows the settings', await visible('setup'));
-		const keyType = await inPanel((h) => h.shadowRoot.getElementById('sc-key').type);
-		check('the key field is masked', keyType === 'password', keyType);
-		const startUrl = await inPanel((h) => h.shadowRoot.getElementById('sc-url').value);
-		check('the address starts filled in', startUrl === 'https://song-upload.slimebeep-relay.workers.dev', startUrl);
-		await inPanel((h) => {
-			h.shadowRoot.getElementById('sc-url').value = '';
-		});
-		await (await el('url')).type(`${BASE}/`);
-		await (await el('key')).type('wrong-key');
-		await (await el('save')).click();
-		const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('songUpload.options')));
-		check(
-			'Save keeps the address (without the trailing /) and key in localStorage',
-			saved.url === BASE && saved.key === 'wrong-key',
-			saved,
-		);
-		check('...and shows the Songs tab with Upload song', (await visible('pick')) && (await text('pick')) === '🎵 Upload song');
+		check('the panel opens on Songs with Upload song', (await visible('pick')) && (await text('pick')) === '🎵 Upload song');
 		const tabs = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-tabs [data-page]')].map((t) => t.textContent).join(' | '));
 		check(
-			'the pages are Songs | Images | My files | Dice | Cheats | ⚙',
-			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | ⚙',
+			'the pages are Songs | Images | My files | Dice | Cheats (no settings)',
+			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats',
 			tabs,
+		);
+		check(
+			"Room Uploads' old address and key are cleared from the browser",
+			(await page.evaluate(() => localStorage.getItem('songUpload.options'))) === null,
 		);
 
 		const pick = async (/** @type {string} */ file) => {
@@ -721,14 +734,14 @@ async function browserChecks() {
 		check('a .wav is refused before uploading', /not an mp3/.test(await pick(files.wav)), await text('err'));
 		check('a wav renamed to .mp3 is refused by its bytes', /not a real mp3/.test(await pick(files.renamed)), await text('err'));
 		check('a file over 500 MB is refused', /at most 500 MB/.test(await pick(files.huge)), await text('err'));
-		check('a wrong key is reported', /Not signed in/.test(await pick(files.song)), await text('err'));
-
-		await tab('⚙');
-		await inPanel((h) => {
-			h.shadowRoot.getElementById('sc-key').value = '';
+		check(
+			'before logging in, an upload says to log in with SlimeBeep',
+			/Log in to Bondage Club with SlimeBeep first/.test(await pick(files.song)),
+			await text('err'),
+		);
+		await page.evaluate(() => {
+			/** @type {any} */ (window).loggedIn = true;
 		});
-		await (await el('key')).type(KEY);
-		await (await el('save')).click();
 
 		/** @type {string[]} */
 		const seen = [];
@@ -1013,6 +1026,7 @@ async function browserChecks() {
 			need,
 		);
 		await lone.close();
+		check('every upload signed in with a SlimeBeep proof', (await page.evaluate(() => /** @type {any} */ (window).proofs)) > 5);
 		check('no page errors', errors.length === 0, errors);
 	} finally {
 		await browser.close();
