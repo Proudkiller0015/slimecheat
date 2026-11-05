@@ -901,6 +901,33 @@ async function browserChecks() {
 		await (await el('refresh')).click();
 		await page.waitForFunction(() => /^Used/.test(document.getElementById('su-host').shadowRoot.getElementById('sc-used').textContent));
 		check('refresh reloads the list', (await rows()).length === shown.length - 2);
+		// Another player (member 777) uploads an image; the owner's My files then groups by player, theirs first.
+		const k777 = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+		const j777 = await crypto.subtle.exportKey('jwk', k777.publicKey);
+		const t777 = Date.now();
+		const s777 = Buffer.from(
+			await crypto.subtle.sign(
+				{ name: 'ECDSA', hash: 'SHA-256' },
+				k777.privateKey,
+				new TextEncoder().encode(`slimebeep-proof|slimecheat|777|${t777}`),
+			),
+		).toString('base64url');
+		const proof777 = { memberNumber: 777, time: t777, pub: { x: j777.x, y: j777.y }, sig: s777, rk: null, name: 'Lilly' };
+		const put777 = await call('PUT', '/upload/image?name=lilly.png', {
+			body: pics.png,
+			headers: { Authorization: `SlimeBeep ${Buffer.from(JSON.stringify(proof777)).toString('base64')}` },
+		});
+		check("another player's upload goes in as theirs", put777.status === 200, put777.status);
+		await (await el('refresh')).click();
+		await page.waitForFunction(() => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-user').length === 2);
+		const heads = await inPanel((h) => [...h.shadowRoot.querySelectorAll('.sc-user')].map((x) => x.textContent));
+		check(
+			"the owner's My files shows everyone's files grouped by player, theirs first, with no button to press",
+			heads[0] === 'You #4242 · 1 file' &&
+				heads[1] === 'Lilly #777 · 1 file' &&
+				!(await inPanel((h) => !!h.shadowRoot.getElementById('sc-all'))),
+			heads,
+		);
 
 		// Cheats, on a stand-in game: the lock burner by body part, and unlock every item.
 		await page.evaluate(() => {

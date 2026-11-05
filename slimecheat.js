@@ -149,7 +149,7 @@
 				<div id="sc-done" hidden><input class="sb-search" id="sc-link" readonly aria-label="Link"><div class="sc-line"><button class="sb-go" id="sc-copy">Copy link</button><span class="sb-hint" id="sc-copied"></span></div><span class="sb-hint" id="sc-lasts"></span></div>
 			</div>
 			<div class="sc-page" id="sc-files" hidden>
-				<div class="sc-line"><span class="sb-hint" id="sc-used" style="flex:1"></span><button class="sb-pill" id="sc-all" hidden>👥 All users</button><button class="sb-pill" id="sc-refresh" title="Refresh">↻</button></div>
+				<div class="sc-line"><span class="sb-hint" id="sc-used" style="flex:1"></span><button class="sb-pill" id="sc-refresh" title="Refresh">↻</button></div>
 				<div id="sc-list"></div>
 			</div>
 			<div class="sc-page" id="sc-dice" hidden>
@@ -189,8 +189,6 @@
 		let running = null;
 		/** @type {keyof typeof KINDS} What the upload page takes now. */
 		let kind = 'songs';
-		/** Whether My files shows everyone's files (owners only). */
-		let showAll = false;
 
 		/**
 		 * Shows a problem, or clears it.
@@ -549,27 +547,33 @@
 			return row;
 		};
 
-		/** Fills My files (owners can switch to everyone's, grouped by player). */
+		/**
+		 * Fills My files: your own; for the owners, everyone's, grouped by player with yours first (the server only
+		 * answers ?all=1 for the owners, so everyone else just gets their own).
+		 */
 		const listFiles = async () => {
 			const list = $('list');
 			$('used').textContent = 'Loading…';
 			try {
-				/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number, by?: number, byName?: string }[], used: number, cap: number, admin?: boolean }} */
-				const answer = await call('GET', showAll ? '/upload/files?all=1' : '/upload/files', new AbortController().signal);
+				/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number, by?: number, byName?: string }[], used: number, cap: number, admin?: boolean, me?: number }} */
+				const answer = await call('GET', '/upload/files?all=1', new AbortController().signal);
 				$('used').textContent = `Used ${size(answer.used)} of ${size(answer.cap)}`;
-				$('all').hidden = !answer.admin;
-				$('all').classList.toggle('on', showAll);
-				if (!showAll) {
+				/** @type {Map<number, typeof answer.files>} */
+				const by = new Map();
+				for (const f of answer.files) {
+					by.set(f.by || 0, [...(by.get(f.by || 0) || []), f]);
+				}
+				if (!answer.admin || [...by.keys()].every((n) => n === answer.me)) {
 					list.replaceChildren(...answer.files.map(fileRow));
 				} else {
-					/** @type {Map<number, typeof answer.files>} */
-					const by = new Map();
-					for (const f of answer.files) {
-						by.set(f.by || 0, [...(by.get(f.by || 0) || []), f]);
-					}
+					const groups = [...by].sort(([a], [b]) => Number(b === answer.me) - Number(a === answer.me));
 					list.replaceChildren(
-						...[...by].flatMap(([n, files]) => [
-							make('div', 'sc-user', `${files[0].byName || 'Player'} #${n} · ${files.length} file${files.length > 1 ? 's' : ''}`),
+						...groups.flatMap(([n, files]) => [
+							make(
+								'div',
+								'sc-user',
+								`${n === answer.me ? 'You' : files[0].byName || 'Player'} #${n} · ${files.length} file${files.length > 1 ? 's' : ''}`,
+							),
 							...files.map(fileRow),
 						]),
 					);
@@ -583,10 +587,6 @@
 			}
 		};
 		onClick('refresh', listFiles);
-		onClick('all', () => {
-			showAll = !showAll;
-			return listFiles();
-		});
 
 		// ---- Dice
 		onClick('droll', () => {
