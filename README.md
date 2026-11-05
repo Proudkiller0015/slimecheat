@@ -1,28 +1,46 @@
-# Room Uploads
+# SlimeCheat
 
-A small Bondage Club userscript: pick an mp3 or an image, it uploads to your own Cloudflare R2 storage,
-and you get a direct link with a **Copy link** button to paste into your room's customization: the
-music setting for a song, the Image URL for a background. Everyone in the room hears and sees it,
-add-on or not, since it's a plain link. It doesn't touch the game: no room data, no game state, no bcModSdk.
+<img src="icon-128.png" alt="" width="96" align="right">
 
-- **Songs**: mp3 only (checked by name and by the file's first bytes), up to 500 MB, sent in 50 MB parts
-  with progress.
-- **Images**: .jpg, .jpeg, .png or .webp only, the formats the game's Image URL accepts
-  (`ChatAdminRoomCustomizationImageFormats` in R133: the link's path must end in one of them). Checked by
-  name and by the file's first bytes (JPEG `FF D8 FF`, PNG `89 50 4E 47`, WEBP `RIFF....WEBP`), up to
-  25 MB, sent in one request with progress. The link ends in the extension of the real type (`.jpg` for
-  a JPEG, even one named `.jpeg` or `.png`).
-- Links last 5 days.
-- **My files**: your songs and images, newest first, with name, size, upload date, time left, Copy link
-  and Delete (click twice: "Sure?"); images show a small thumbnail. Shows the storage used.
-- **⚙**: the upload address and upload key, kept in this browser's localStorage only.
+> **⚠ SlimeCheat requires [SlimeBeep](https://proudkiller0015.github.io/slimebeep/install.html).** It opens inside
+> SlimeBeep's window and signs you in through it. Get SlimeBeep from its
+> [install page](https://proudkiller0015.github.io/slimebeep/install.html), or turn it on in
+> [FUSAM](https://sidiousious.gitlab.io/bc-addon-loader/), the game's add-on manager. Without SlimeBeep,
+> SlimeCheat only shows a note saying so.
 
-The round upload button can be dragged anywhere; it remembers where. The file, Worker and bucket keep
-their first name, `song-upload`.
+A hack panel for Bondage Club that lives in SlimeBeep's window (💻 tab, or type `!cheats` in a SlimeBeep chat)
+and follows SlimeBeep's theme.
+
+**[Install SlimeCheat](https://proudkiller0015.github.io/slimecheat/slimecheat.user.js)** (Tampermonkey or
+Violentmonkey).
+
+- **🎵 Songs / 🖼 Images**: upload an mp3 (up to 500 MB) or a room background (.jpg, .png, .webp, up to 25 MB)
+  and get a direct link to paste into your room's music or Image URL. Everyone in the room hears and sees
+  it, add-on or not.
+- **📁 My files**: your uploads, newest first, with Copy link and Delete. Your files last 12 hours.
+- **🎲 Dice**: rolls into the room exactly like `/dice`, with the result you type (or a fair roll).
+- **🔓 Cheats**, on yourself only:
+  - 🔥 **Lock burner**: pick a body part and burn its lock off, take the item off, or burn every lock.
+  - 🎁 **Unlock every item**: adds every item in the game to your inventory (saved to your account).
+
+SlimeCheat is built so it breaks before the game does: every cheat runs inside a guard, so if the game
+changes, the cheat shows an error in the panel (or says which game function is gone) and the game carries on.
+
+Uploads need no key: SlimeBeep signs a short proof with your SlimeBeep key (`SlimeBeep.api.proveIdentity`),
+and the upload server remembers that key for your member number the first time.
 
 ## The Worker (`worker/`)
 
-Only someone with the upload key can upload, list or delete. Anyone can play a song or load an image.
+Uploading, listing and deleting need a SlimeBeep proof (`Authorization: SlimeBeep <base64 JSON>`) or the
+owner's upload key. Anyone can play a song or load an image.
+
+- **Who:** a proof is `slimebeep-proof|slimecheat|<member>|<time>` signed with the player's SlimeBeep key,
+  at most 5 minutes old. The first proof for a member number pins that key (in the bucket under `_auth/`);
+  later ones must use it, or a new key the pinned one signed over to (SlimeBeep's hand-over `rk`).
+- **Per player:** each player sees and deletes only their own files; their files last 12 hours and they
+  can keep 1000 MB at a time. The owners (`OWNERS` in `wrangler.toml`) keep files 5 days, and can list
+  everyone's (`GET /upload/files?all=1`, grouped by player in the panel) and delete any. When the bucket is
+  full, other players' files go first.
 
 | Request                              | What it does                                  | Key |
 | ------------------------------------ | --------------------------------------------- | --- |
@@ -71,8 +89,7 @@ npx wrangler deploy
 `npx wrangler r2 bucket lifecycle list song-upload`. The deploy prints the Worker's address
 (`https://song-upload.<subdomain>.workers.dev`).
 
-Then install `song-upload.user.js` in Tampermonkey or Violentmonkey, open the game, click the round
-upload button, and enter the Worker's address and the same key.
+Then install `slimecheat.user.js` in Tampermonkey or Violentmonkey (with SlimeBeep) and open the game.
 
 ## Checks
 

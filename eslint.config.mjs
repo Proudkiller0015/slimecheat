@@ -22,7 +22,7 @@ const rules = {
 export default [
 	js.configs.recommended,
 	prettier,
-	{ files: ['song-upload.user.js'], languageOptions: { ecmaVersion: 2022, sourceType: 'script', globals: globals.browser }, rules },
+	{ files: ['slimecheat.user.js'], languageOptions: { ecmaVersion: 2022, sourceType: 'script', globals: globals.browser }, rules },
 	{ files: ['worker/src/index.js'], languageOptions: { ecmaVersion: 2022, sourceType: 'module', globals: globals.serviceworker }, rules },
 	{
 		files: ['test.js'],

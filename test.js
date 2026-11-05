@@ -129,6 +129,70 @@ async function begin(size) {
 	return { res, ...(res.ok ? await res.json() : {}) };
 }
 
+/**
+ * SlimeBeep sign-in: a proof signed with the owner's SlimeBeep key, the first one pinning it.
+ */
+async function proofChecks() {
+	const subtle = globalThis.crypto.subtle;
+	const b64u = (/** @type {ArrayBuffer} */ b) => Buffer.from(b).toString('base64url');
+	const newKey = async () => {
+		const k = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+		const jwk = await subtle.exportKey('jwk', k.publicKey);
+		return { priv: k.privateKey, pub: { x: String(jwk.x), y: String(jwk.y) } };
+	};
+	const sign = async (/** @type {CryptoKey} */ priv, /** @type {string} */ text) =>
+		b64u(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, priv, new TextEncoder().encode(text)));
+	/**
+	 * @param {{ priv: CryptoKey, pub: { x: string, y: string } }} k
+	 * @param {{ member?: number, time?: number, audience?: string, rk?: unknown, all?: boolean }} [o]
+	 */
+	const files = async (k, o = {}) => {
+		const member = o.member ?? 255659;
+		const time = o.time ?? Date.now();
+		const proof = {
+			memberNumber: member,
+			time,
+			pub: k.pub,
+			sig: await sign(k.priv, `slimebeep-proof|${o.audience ?? 'slimecheat'}|${member}|${time}`),
+			rk: o.rk ?? null,
+		};
+		return call('GET', o.all ? '/upload/files?all=1' : '/upload/files', {
+			headers: { Authorization: `SlimeBeep ${Buffer.from(JSON.stringify(proof)).toString('base64')}` },
+		});
+	};
+	const first = await newKey();
+	const ok = await files(first);
+	const list = await ok.json();
+	check('a SlimeBeep proof from the owner signs in, no key needed', ok.status === 200, ok.status);
+	check("the pinned key isn't listed as a file", !JSON.stringify(list).includes('_auth'), list);
+	check('the same key signs in again', (await files(first)).status === 200);
+	const own = await (await files(first, { all: true })).json();
+	check("the owner can list everyone's files", own.admin === true && own.me === 255659, own);
+	const player = await newKey();
+	const theirs = await files(player, { member: 12345 });
+	const theirList = await theirs.json();
+	check(
+		'another player signs in as themselves, sees only their own files and gets the 1000 MB quota',
+		theirs.status === 200 &&
+			theirList.admin === false &&
+			theirList.me === 12345 &&
+			theirList.files.length === 0 &&
+			theirList.cap === 1000 * 1024 * 1024,
+		theirList,
+	);
+	const peek = await (await files(player, { member: 12345, all: true })).json();
+	check("...and can't ask for everyone's files", peek.admin === false && peek.files.length === 0, peek);
+	check("...and someone else can't take their number with another key", (await files(await newKey(), { member: 12345 })).status === 401);
+	check('a proof made for another server is refused', (await files(first, { audience: 'other' })).status === 401);
+	check('an old proof is refused', (await files(first, { time: Date.now() - 10 * 60 * 1000 })).status === 401);
+	const other = await newKey();
+	check("another key claiming the owner's number is refused", (await files(other)).status === 401);
+	const rk = { x: first.pub.x, y: first.pub.y, sig: await sign(first.priv, `rekey|255659|${other.pub.x}|${other.pub.y}`) };
+	check('a new key the pinned one handed over to signs in', (await files(other, { rk })).status === 200);
+	check('then the new key alone works', (await files(other)).status === 200);
+	check('and the old key no longer does', (await files(first)).status === 401);
+}
+
 async function workerChecks() {
 	const pre = await call('OPTIONS', '/upload', {
 		headers: { 'Access-Control-Request-Method': 'PUT', 'Access-Control-Request-Headers': 'authorization,content-type' },
@@ -508,11 +572,8 @@ async function imageChecks() {
  * The userscript in headless Chrome on a page at the game's address.
  */
 async function browserChecks() {
-	const script = fs.readFileSync(path.join(__dirname, 'song-upload.user.js'), 'utf8');
-	check(
-		'the userscript never touches the game (no game globals, no bcModSdk)',
-		!/\b(ServerSend|ServerSocket|ChatRoom\w*|Player|bcModSdk)\b/.test(script),
-	);
+	const script = fs.readFileSync(path.join(__dirname, 'slimecheat.user.js'), 'utf8');
+	check('the userscript hooks nothing in the game (no bcModSdk, no socket handlers)', !/\b(ServerSocket|bcModSdk)\b/.test(script));
 	const files = {
 		wav: path.join(tmp, 'song.wav'),
 		renamed: path.join(tmp, 'renamed.mp3'),
@@ -565,7 +626,36 @@ async function browserChecks() {
 		const errors = [];
 		page.on('pageerror', (e) => errors.push(String(e)));
 		await page.goto(`${GAME}/R133/BondageClub/`);
+		// A stand-in SlimeBeep: addPanel mounts SlimeCheat's element in a shadow root (like a panel of its own).
+		await page.evaluate(() => {
+			const host = document.createElement('div');
+			host.id = 'su-host';
+			const sr = host.attachShadow({ mode: 'open' });
+			document.body.append(host);
+			const panel = document.createElement('div');
+			panel.id = 'panel';
+			sr.append(panel);
+			/** @type {any} */ (window).SlimeBeep = {
+				api: {
+					addPanel(/** @type {any} */ p) {
+						const el = document.createElement('div');
+						p.mount(el);
+						panel.append(el);
+						/** @type {any} */ (window).added = p;
+						return { open() {}, remove() {} };
+					},
+					proveIdentity: async () => null,
+				},
+			};
+		});
 		await page.addScriptTag({ content: script });
+		await page.waitForFunction(() => !!document.getElementById('su-host').shadowRoot.getElementById('sc-root'));
+		const added = await page.evaluate(() => ({ id: window.added.id, icon: window.added.icon, title: window.added.title }));
+		check(
+			'SlimeCheat adds its hack panel to SlimeBeep',
+			added.id === 'slimecheat' && added.icon === '💻' && /SlimeCheat/.test(added.title),
+			added,
+		);
 
 		const host = /** @type {import('puppeteer-core').ElementHandle<HTMLElement>} */ (await page.$('#su-host'));
 		/**
@@ -575,46 +665,54 @@ async function browserChecks() {
 		 */
 		const inPanel = (fn, arg) => host.evaluate(fn, arg);
 		const el = async (/** @type {string} */ id) =>
-			(await page.evaluateHandle((i) => document.getElementById('su-host').shadowRoot.getElementById(i), id)).asElement();
-		const visible = (/** @type {string} */ id) =>
-			inPanel(
-				(h, i) => !h.shadowRoot.getElementById(i).closest('[hidden]') && h.shadowRoot.getElementById('panel').classList.contains('on'),
-				id,
-			);
-		const text = (/** @type {string} */ id) => inPanel((h, i) => h.shadowRoot.getElementById(i).textContent, id);
+			(await page.evaluateHandle((i) => document.getElementById('su-host').shadowRoot.getElementById(`sc-${i}`), id)).asElement();
+		const visible = (/** @type {string} */ id) => inPanel((h, i) => !h.shadowRoot.getElementById(`sc-${i}`).closest('[hidden]'), id);
+		const text = (/** @type {string} */ id) => inPanel((h, i) => h.shadowRoot.getElementById(`sc-${i}`).textContent, id);
 
-		const btn = await el('btn');
-		const box = await btn.boundingBox();
-		await page.mouse.click(box.x + 20, box.y + 20);
-		check('the button opens the panel, on the settings while nothing is set', await visible('setup'));
-		const keyType = await inPanel((h) => h.shadowRoot.getElementById('key').type);
+		const tab = (/** @type {string} */ name) =>
+			page.evaluate(
+				(n) =>
+					[...document.getElementById('su-host').shadowRoot.querySelectorAll('#sc-tabs [data-page]')]
+						.find((t) => t.textContent.includes(n))
+						.click(),
+				name,
+			);
+		check('the panel opens on Songs', await visible('pick'));
+		await tab('⚙');
+		check('⚙ shows the settings', await visible('setup'));
+		const keyType = await inPanel((h) => h.shadowRoot.getElementById('sc-key').type);
 		check('the key field is masked', keyType === 'password', keyType);
+		const startUrl = await inPanel((h) => h.shadowRoot.getElementById('sc-url').value);
+		check('the address starts filled in', startUrl === 'https://song-upload.slimebeep-relay.workers.dev', startUrl);
+		await inPanel((h) => {
+			h.shadowRoot.getElementById('sc-url').value = '';
+		});
 		await (await el('url')).type(`${BASE}/`);
 		await (await el('key')).type('wrong-key');
-		await (await el('savebtn')).click();
+		await (await el('save')).click();
 		const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('songUpload.options')));
 		check(
 			'Save keeps the address (without the trailing /) and key in localStorage',
 			saved.url === BASE && saved.key === 'wrong-key',
 			saved,
 		);
-		check('...and shows the Songs tab with Upload song', (await visible('pick')) && (await text('pick')) === 'Upload song');
-		const tabs = await inPanel((h) => [...h.shadowRoot.querySelectorAll('.tab')].map((t) => t.textContent).join(' | '));
+		check('...and shows the Songs tab with Upload song', (await visible('pick')) && (await text('pick')) === '🎵 Upload song');
+		const tabs = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-tabs [data-page]')].map((t) => t.textContent).join(' | '));
 		check(
-			'the tabs are Songs | Images | My files, and the title says Room uploads',
-			tabs === 'Songs | Images | My files' && /Room uploads/.test(await inPanel((h) => h.shadowRoot.querySelector('.head b').textContent)),
+			'the pages are Songs | Images | My files | Dice | Cheats | ⚙',
+			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | ⚙',
 			tabs,
 		);
 
 		const pick = async (/** @type {string} */ file) => {
 			await inPanel((h) => {
-				h.shadowRoot.getElementById('err').textContent = '';
+				h.shadowRoot.getElementById('sc-err').textContent = '';
 			});
 			await (await el('file')).uploadFile(file);
 			await page.waitForFunction(
 				() => {
 					const r = document.getElementById('su-host').shadowRoot;
-					return r.getElementById('prog').hidden && (r.getElementById('err').textContent || !r.getElementById('done').hidden);
+					return r.getElementById('sc-prog').hidden && (r.getElementById('sc-err').textContent || !r.getElementById('sc-done').hidden);
 				},
 				{ timeout: 120000 },
 			);
@@ -623,14 +721,14 @@ async function browserChecks() {
 		check('a .wav is refused before uploading', /not an mp3/.test(await pick(files.wav)), await text('err'));
 		check('a wav renamed to .mp3 is refused by its bytes', /not a real mp3/.test(await pick(files.renamed)), await text('err'));
 		check('a file over 500 MB is refused', /at most 500 MB/.test(await pick(files.huge)), await text('err'));
-		check('a wrong key is reported', /Wrong or missing upload key/.test(await pick(files.song)), await text('err'));
+		check('a wrong key is reported', /Not signed in/.test(await pick(files.song)), await text('err'));
 
-		await (await el('gear')).click();
+		await tab('⚙');
 		await inPanel((h) => {
-			h.shadowRoot.getElementById('key').value = '';
+			h.shadowRoot.getElementById('sc-key').value = '';
 		});
 		await (await el('key')).type(KEY);
-		await (await el('savebtn')).click();
+		await (await el('save')).click();
 
 		/** @type {string[]} */
 		const seen = [];
@@ -650,11 +748,11 @@ async function browserChecks() {
 		]);
 
 		check('my song.mp3 uploads', !(await pick(files.song)), await text('err'));
-		const link = await inPanel((h) => h.shadowRoot.getElementById('link').value);
+		const link = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
 		check('the link shows and ends in .mp3', link.startsWith(`${BASE}/`) && link.endsWith('.mp3'), link);
 		check(
-			'the panel says the link lasts 5 days',
-			/lasts 5 days/.test(await inPanel((h) => h.shadowRoot.getElementById('done').textContent)),
+			'the panel says the link lasts as long as the file',
+			/lasts as long as the file/.test(await inPanel((h) => h.shadowRoot.getElementById('sc-done').textContent)),
 		);
 		await (await el('copy')).click();
 		const clip = await page.evaluate(() => navigator.clipboard.readText());
@@ -678,16 +776,11 @@ async function browserChecks() {
 		}, link);
 		check('the game page can read a Range of a song (CORS)', ranged.s === 206 && ranged.n === 4 && /^bytes 0-3\//.test(ranged.cr), ranged);
 
-		const tab = (/** @type {string} */ name) =>
-			page.evaluate(
-				(n) => [...document.getElementById('su-host').shadowRoot.querySelectorAll('.tab')].find((t) => t.textContent === n).click(),
-				name,
-			);
 		await tab('Images');
-		const accept = await inPanel((h) => h.shadowRoot.getElementById('file').accept);
+		const accept = await inPanel((h) => h.shadowRoot.getElementById('sc-file').accept);
 		check(
 			'the Images tab: Upload image, jpg/png/webp up to 25 MB, the old song link hidden',
-			(await text('pick')) === 'Upload image' &&
+			(await text('pick')) === '🖼 Upload image' &&
 				/jpg, png or webp, up to 25 MB/.test(await text('limits')) &&
 				accept.includes('.webp') &&
 				!accept.includes('.mp3') &&
@@ -702,9 +795,12 @@ async function browserChecks() {
 		);
 		check('an image over 25 MB is refused', /at most 25 MB/.test(await pick(files.hugePng)), await text('err'));
 		check('room background.png uploads', !(await pick(files.png)), await text('err'));
-		const imgLink = await inPanel((h) => h.shadowRoot.getElementById('link').value);
+		const imgLink = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
 		check('the image link shows and ends in .png', new RegExp(`^${BASE}/[0-9a-f]{32}\\.png$`).test(imgLink), imgLink);
-		check('...and says it lasts 5 days', /lasts 5 days/.test(await inPanel((h) => h.shadowRoot.getElementById('done').textContent)));
+		check(
+			'...and says how long it lasts',
+			/lasts as long as the file/.test(await inPanel((h) => h.shadowRoot.getElementById('sc-done').textContent)),
+		);
 		await (await el('copy')).click();
 		check('Copy link copies the image link', (await page.evaluate(() => navigator.clipboard.readText())) === imgLink);
 		const drawn = await page.evaluate(async (url) => {
@@ -733,20 +829,20 @@ async function browserChecks() {
 			drawn,
 		);
 		await tab('Songs');
-		check('back on Songs: Upload song again', (await text('pick')) === 'Upload song');
+		check('back on Songs: Upload song again', (await text('pick')) === '🎵 Upload song');
 
 		await tab('My files');
-		await page.waitForFunction(() => document.getElementById('su-host').shadowRoot.querySelectorAll('.file').length > 0);
+		await page.waitForFunction(() => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-file').length > 0);
 		const rows = () =>
 			inPanel((h) =>
-				[...h.shadowRoot.querySelectorAll('.file')].map((r) => ({
+				[...h.shadowRoot.querySelectorAll('.sc-file')].map((r) => ({
 					name: r.querySelector('b').textContent,
-					info: r.querySelector('.hint').textContent,
+					info: r.querySelector('.sb-sub').textContent,
 					thumb: r.querySelector('img') ? r.querySelector('img').src : '',
 				})),
 			);
 		await page.waitForFunction(() => {
-			const img = document.getElementById('su-host').shadowRoot.querySelector('.file img');
+			const img = document.getElementById('su-host').shadowRoot.querySelector('.sc-file img');
 			return img && img.complete && img.naturalWidth > 0;
 		});
 		const shown = await rows();
@@ -763,12 +859,12 @@ async function browserChecks() {
 			shown,
 		);
 		check('My files shows the storage used', /^Used [\d.]+ MB of 400\.0 MB$/.test(await text('used')), await text('used'));
-		await inPanel((h) => h.shadowRoot.querySelectorAll('.file .go')[1].click());
+		await inPanel((h) => h.shadowRoot.querySelectorAll('.sc-file .sc-copylink')[1].click());
 		check("a song row's Copy link copies its link", (await page.evaluate(() => navigator.clipboard.readText())) === link);
-		await inPanel((h) => h.shadowRoot.querySelector('.file .go').click());
+		await inPanel((h) => h.shadowRoot.querySelector('.sc-file .sc-copylink').click());
 		check("the image row's Copy link copies its link", (await page.evaluate(() => navigator.clipboard.readText())) === imgLink);
-		const delBtn = (/** @type {number} */ i) => inPanel((h, n) => h.shadowRoot.querySelectorAll('.file .pill')[n].textContent, i);
-		const delClick = (/** @type {number} */ i) => inPanel((h, n) => h.shadowRoot.querySelectorAll('.file .pill')[n].click(), i);
+		const delBtn = (/** @type {number} */ i) => inPanel((h, n) => h.shadowRoot.querySelectorAll('.sc-file .sc-del')[n].textContent, i);
+		const delClick = (/** @type {number} */ i) => inPanel((h, n) => h.shadowRoot.querySelectorAll('.sc-file .sc-del')[n].click(), i);
 		await delClick(0);
 		check(
 			'Delete asks "Sure?" first and keeps the image',
@@ -776,7 +872,7 @@ async function browserChecks() {
 		);
 		await delClick(0);
 		await page.waitForFunction(
-			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('.file').length === n - 1,
+			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-file').length === n - 1,
 			{},
 			shown.length,
 		);
@@ -784,14 +880,139 @@ async function browserChecks() {
 		await delClick(0);
 		await delClick(0);
 		await page.waitForFunction(
-			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('.file').length === n - 2,
+			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-file').length === n - 2,
 			{},
 			shown.length,
 		);
 		check('a song deletes the same way', (await rows())[0].name === 'mid.mp3' && (await fetch(link)).status === 404);
 		await (await el('refresh')).click();
-		await page.waitForFunction(() => /^Used/.test(document.getElementById('su-host').shadowRoot.getElementById('used').textContent));
+		await page.waitForFunction(() => /^Used/.test(document.getElementById('su-host').shadowRoot.getElementById('sc-used').textContent));
 		check('refresh reloads the list', (await rows()).length === shown.length - 2);
+
+		// Cheats, on a stand-in game: the lock burner by body part, and unlock every item.
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			const group = (/** @type {string} */ name, /** @type {string} */ desc) => ({
+				Name: name,
+				Description: desc,
+				Category: 'Item',
+				Family: 'Female3DCG',
+			});
+			const cuffs = { Asset: { Name: 'Cuffs', Description: 'Leather Cuffs', Group: group('ItemArms', 'Arms') }, lock: true };
+			const gag = { Asset: { Name: 'Gag', Description: 'Ball Gag', Group: group('ItemMouth', 'Mouth') }, lock: false };
+			const hair = { Asset: { Name: 'Hair', Group: { Name: 'HairFront', Category: 'Appearance' } } };
+			w.calls = [];
+			w.Player = { MemberNumber: 255659, Name: 'Sam', AssetFamily: 'Female3DCG', Appearance: [cuffs, gag, hair], Inventory: [] };
+			w.InventoryGet = (/** @type {any} */ C, /** @type {string} */ g) =>
+				C.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === g) || null;
+			w.InventoryGetLock = (/** @type {any} */ i) => (i.lock ? { Asset: { Name: 'MetalPadlock' } } : null);
+			w.InventoryUnlock = (/** @type {any} */ C, /** @type {any} */ i) => {
+				i.lock = false;
+				w.calls.push(`unlock ${i.Asset.Name}`);
+			};
+			w.InventoryRemove = (/** @type {any} */ C, /** @type {string} */ g) => {
+				C.Appearance = C.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== g);
+				w.calls.push(`remove ${g}`);
+			};
+			w.CharacterRefresh = () => w.calls.push('refresh');
+			w.ChatRoomCharacterUpdate = () => w.calls.push('room');
+			w.Asset = [
+				cuffs.Asset,
+				gag.Asset,
+				{ Name: 'Rope', Group: group('ItemLegs', 'Legs') },
+				{ Name: 'Other', Group: { ...group('ItemArms', 'Arms'), Family: 'Other' } },
+			];
+			w.InventoryAddMany = (/** @type {any} */ C, /** @type {any[]} */ items) => {
+				for (const it of items) {
+					C.Inventory.push(it);
+				}
+				w.calls.push(`add ${items.length}`);
+			};
+		});
+		await tab('Cheats');
+		const parts = await inPanel((h) =>
+			[...h.shadowRoot.getElementById('sc-part').options].map((o) => `${o.value}=${o.textContent}`).join('|'),
+		);
+		check(
+			'the lock burner lists my item slots by body part, locked ones marked (no hair or clothes)',
+			parts === 'ItemArms=🔒 Arms: Leather Cuffs|ItemMouth=Mouth: Ball Gag',
+			parts,
+		);
+		await (await el('unlock')).click();
+		const burnt = await page.evaluate(() => /** @type {any} */ (window).calls.join(','));
+		check('Burn the lock unlocks only that slot, then saves my look and tells the room', burnt === 'unlock Cuffs,refresh,room', burnt);
+		await inPanel((h) => {
+			const sel = h.shadowRoot.getElementById('sc-part');
+			sel.value = 'ItemMouth';
+		});
+		await (await el('remove')).click();
+		const removed = await page.evaluate(() => ({
+			calls: /** @type {any} */ (window).calls.join(','),
+			left: window.Player.Appearance.length,
+		}));
+		check('Take it off removes that item', removed.calls.endsWith('remove ItemMouth,refresh,room') && removed.left === 2, removed);
+		await (await el('allitems')).click();
+		const first = await page.evaluate(() => ({ calls: /** @type {any} */ (window).calls.length, inv: window.Player.Inventory.length }));
+		await (await el('allitems')).click();
+		const items = await page.evaluate(() => ({ inv: window.Player.Inventory.map((/** @type {any} */ i) => i.Name).join(','), msg: '' }));
+		check(
+			'Unlock all items asks first, then adds every item of my body type',
+			first.inv === 0 && items.inv === 'Cuffs,Gag,Rope' && /3 new items/.test(await text('itemsdone')),
+			[first, items],
+		);
+		// A game function that throws: the error shows in SlimeCheat and nothing breaks.
+		await page.evaluate(() => {
+			/** @type {any} */ (window).InventoryUnlock = () => {
+				throw new Error('boom');
+			};
+			/** @type {any} */ (window).Player.Appearance[0].lock = true;
+		});
+		await (await el('parts')).click();
+		await (await el('burnall')).click();
+		check(
+			'a cheat that fails shows its error in the panel instead of breaking the game',
+			/⚠ boom/.test(await text('err')),
+			await text('err'),
+		);
+		// The game without the functions a cheat needs: it says so.
+		await page.evaluate(() => {
+			delete (/** @type {any} */ (window).InventoryRemove);
+		});
+		await (await el('remove')).click();
+		check(
+			'a missing game function turns that cheat off with a note',
+			/The game changed \(InventoryRemove/.test(await text('err')),
+			await text('err'),
+		);
+		await tab('Songs');
+
+		// Without SlimeBeep: a note says SlimeCheat needs it, with links to SlimeBeep and FUSAM.
+		const lone = await browser.newPage();
+		const cdp2 = await lone.createCDPSession();
+		await cdp2.send('Fetch.enable', { patterns: [{ urlPattern: `${GAME}/*` }] });
+		cdp2.on('Fetch.requestPaused', ({ requestId }) =>
+			cdp2.send('Fetch.fulfillRequest', {
+				requestId,
+				responseCode: 200,
+				responseHeaders: [{ name: 'Content-Type', value: 'text/html' }],
+				body: Buffer.from('<!DOCTYPE html><title>BC</title><body></body>').toString('base64'),
+			}),
+		);
+		await lone.goto(`${GAME}/R133/BondageClub/`);
+		await lone.evaluate(() => {
+			/** @type {any} */ (window).SlimeCheatWait = 300;
+		});
+		await lone.addScriptTag({ content: script });
+		await lone.waitForSelector('#sc-need', { timeout: 5000 });
+		const need = await lone.$eval('#sc-need', (n) => ({ text: n.textContent, links: [...n.querySelectorAll('a')].map((a) => a.href) }));
+		check(
+			'without SlimeBeep, a note says SlimeCheat needs it, with SlimeBeep and FUSAM links',
+			/needs SlimeBeep/.test(need.text) &&
+				need.links.includes('https://proudkiller0015.github.io/slimebeep/install.html') &&
+				need.links.includes('https://sidiousious.gitlab.io/bc-addon-loader/'),
+			need,
+		);
+		await lone.close();
 		check('no page errors', errors.length === 0, errors);
 	} finally {
 		await browser.close();
@@ -802,6 +1023,7 @@ async function browserChecks() {
 	try {
 		pics = await makePictures();
 		await workerChecks();
+		await proofChecks();
 		await imageChecks();
 		await browserChecks();
 	} finally {

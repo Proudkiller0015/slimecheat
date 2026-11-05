@@ -5,6 +5,8 @@ compatibility_date = "2026-09-01"
 [vars]
 # Most bytes the bucket may hold, songs plus unfinished uploads; the oldest songs are deleted to stay under it (the free plan stores 10 GB).
 CAP_BYTES = "9500000000"
+# The owners' member numbers (SlimeQueenSamantha): files kept 5 days, and they see everyone's files.
+OWNERS = "255659"
 
 [[r2_buckets]]
 binding = "SONGS"
