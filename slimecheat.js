@@ -173,6 +173,11 @@
 					<span class="sb-hint" id="sc-burnt"></span>
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
+					<div class="sb-name">👻 Invisible</div>
+					<div class="sb-hint">Hides all of you with the game's own Script item (like ULTRAbc's /invisible). Players who block scripts still see you.</div>
+					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-invis">Go invisible</button><button class="sb-pill" id="sc-vis">Visible again</button><span class="sb-hint" id="sc-invisdone"></span></div>
+				</div>
+				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sb-name">🎁 Unlock every item</div>
 					<div class="sb-hint">Adds every item in the game to your own inventory (saved to your account).</div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-allitems">Unlock all items</button><span class="sb-hint" id="sc-itemsdone"></span></div>
@@ -774,6 +779,49 @@
 				: 'Nothing on you is locked.';
 			fillParts();
 		});
+		// ---- Invisible: the game's Script item (group ItemScript) with every body group in its Hide list.
+		onClick('invis', () => {
+			const g = game();
+			if (!g || typeof w.InventoryWear !== 'function' || !Array.isArray(w.AssetGroup)) {
+				if (g) {
+					fail('⚠ The game changed (InventoryWear or AssetGroup is gone): this cheat is off until SlimeCheat is updated.');
+				}
+				return;
+			}
+			const me = player();
+			const hide = me.OnlineSharedSettings && me.OnlineSharedSettings.ScriptPermissions && me.OnlineSharedSettings.ScriptPermissions.Hide;
+			// Bit 1 = yourself may change Hide on your own Script item (Settings › Scripts).
+			if (!hide || !(hide.permission & 1)) {
+				$('invisdone').textContent = 'First allow it: Settings › Scripts › Hide › Self. Then press again.';
+				return;
+			}
+			const groups = w.AssetGroup.filter((/** @type {any} */ gr) => gr && gr.Family === me.AssetFamily && gr.Name !== 'ItemScript').map(
+				(/** @type {any} */ gr) => gr.Name,
+			);
+			w.InventoryWear(me, 'Script', 'ItemScript', null, null, null, null, false);
+			const item = g.InventoryGet(me, 'ItemScript');
+			if (!item) {
+				fail("⚠ The game wouldn't put the Script item on you.");
+				return;
+			}
+			item.Property = { ...(item.Property || {}), Hide: groups };
+			pushLook(g);
+			$('invisdone').textContent = '👻 You are invisible.';
+		});
+		onClick('vis', () => {
+			const g = game();
+			if (!g) {
+				return;
+			}
+			if (!g.InventoryGet(player(), 'ItemScript')) {
+				$('invisdone').textContent = "You aren't invisible.";
+				return;
+			}
+			g.InventoryRemove(player(), 'ItemScript', false);
+			pushLook(g);
+			$('invisdone').textContent = '🙂 Visible again.';
+		});
+
 		let sureItems = 0;
 		onClick('allitems', () => {
 			const g = game();

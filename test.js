@@ -1019,6 +1019,47 @@ async function browserChecks() {
 			first.inv === 0 && items.inv === 'Cuffs,Gag,Rope' && /3 new items/.test(await text('itemsdone')),
 			[first, items],
 		);
+		// Invisible: asks for the Scripts setting first, then wears the Script item hiding every body group.
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			w.AssetGroup = [
+				{ Name: 'BodyUpper', Family: 'Female3DCG' },
+				{ Name: 'ItemArms', Family: 'Female3DCG' },
+				{ Name: 'ItemScript', Family: 'Female3DCG' },
+				{ Name: 'Other', Family: 'Other' },
+			];
+			w.Player.OnlineSharedSettings = { ScriptPermissions: { Hide: { permission: 0 } } };
+			w.InventoryWear = (/** @type {any} */ C, /** @type {string} */ name, /** @type {string} */ group) => {
+				C.Appearance = C.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== group);
+				C.Appearance.push({ Asset: { Name: name, Group: { Name: group, Category: 'Script' } } });
+				w.calls.push(`wear ${name}`);
+			};
+			w.calls = [];
+		});
+		await (await el('invis')).click();
+		const asked = { text: await text('invisdone'), calls: await page.evaluate(() => /** @type {any} */ (window).calls.length) };
+		await page.evaluate(() => {
+			/** @type {any} */ (window).Player.OnlineSharedSettings.ScriptPermissions.Hide.permission = 1;
+		});
+		await (await el('invis')).click();
+		const hidden = await page.evaluate(() => {
+			const it = window.Player.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === 'ItemScript');
+			return { hide: it && it.Property ? it.Property.Hide.join(',') : '', calls: /** @type {any} */ (window).calls.join(',') };
+		});
+		check(
+			'Invisible asks for the Scripts › Hide › Self setting first, then wears the Script item hiding every body group (not itself)',
+			/Settings › Scripts › Hide › Self/.test(asked.text) &&
+				asked.calls === 0 &&
+				hidden.hide === 'BodyUpper,ItemArms' &&
+				hidden.calls === 'wear Script,refresh,room',
+			[asked, hidden],
+		);
+		await (await el('vis')).click();
+		const shown2 = await page.evaluate(() => ({
+			on: window.Player.Appearance.some((/** @type {any} */ i) => i.Asset.Group.Name === 'ItemScript'),
+			calls: /** @type {any} */ (window).calls.join(','),
+		}));
+		check('Visible again takes the Script item off', !shown2.on && /remove ItemScript,refresh,room$/.test(shown2.calls), shown2);
 		// A game function that throws: the error shows in SlimeCheat and nothing breaks.
 		await page.evaluate(() => {
 			/** @type {any} */ (window).InventoryUnlock = () => {
