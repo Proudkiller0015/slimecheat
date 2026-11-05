@@ -1078,6 +1078,39 @@ async function browserChecks() {
 			calls: /** @type {any} */ (window).calls.join(','),
 		}));
 		check('Visible again takes the Script item off', !shown2.on && /remove ItemScript,refresh,room$/.test(shown2.calls), shown2);
+		// Money: sets it and saves it with the game's own sync; refuses nonsense.
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			w.Player.Money = 120;
+			w.ServerPlayerSync = () => w.calls.push(`sync ${w.Player.Money}`);
+			w.calls = [];
+		});
+		await tab('Songs');
+		await tab('Cheats');
+		const before = await text('moneynow');
+		await (await el('money')).type('-5');
+		await (await el('setmoney')).click();
+		const refused = { text: await text('moneydone'), money: await page.evaluate(() => window.Player.Money) };
+		await inPanel((h) => {
+			h.shadowRoot.getElementById('sc-money').value = '';
+		});
+		await (await el('money')).type('5,000');
+		await (await el('setmoney')).click();
+		const set = {
+			money: await page.evaluate(() => window.Player.Money),
+			calls: await page.evaluate(() => /** @type {any} */ (window).calls.join(',')),
+			now: await text('moneynow'),
+		};
+		check(
+			'Money shows what I have, refuses a bad amount, and sets and saves a good one',
+			before === '(you have $120)' &&
+				/whole number/.test(refused.text) &&
+				refused.money === 120 &&
+				set.money === 5000 &&
+				set.calls === 'sync 5000' &&
+				set.now === '(you have $5000)',
+			[before, refused, set],
+		);
 		// A game function that throws: the error shows in SlimeCheat and nothing breaks.
 		await page.evaluate(() => {
 			/** @type {any} */ (window).InventoryUnlock = () => {

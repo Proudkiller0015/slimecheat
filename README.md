@@ -25,6 +25,7 @@ Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed
   - 🔥 **Lock burner**: pick a body part and burn its lock off, take the item off, or burn every lock.
   - 👻 **Invisible**: hides all of you from everyone in the room with the game's own Script item (turn on
     Settings › Scripts › Hide › Self first); **Visible again** undoes it.
+  - 💰 **Money**: set your money to any amount (saved to your account).
   - 🎁 **Unlock every item**: adds every item in the game to your inventory (saved to your account).
 
 SlimeCheat is built so it breaks before the game does: every cheat runs inside a guard, so if the game

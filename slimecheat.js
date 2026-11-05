@@ -180,6 +180,11 @@
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-invis">Go invisible</button><button class="sb-pill" id="sc-vis">Visible again</button><span class="sb-hint" id="sc-invisdone"></span></div>
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
+					<div class="sb-name">💰 Money <span class="sb-hint" id="sc-moneynow"></span></div>
+					<div class="sc-line" style="margin-top:6px"><input class="sb-search" id="sc-money" inputmode="numeric" placeholder="New amount" style="flex:1"><button class="sb-go" id="sc-setmoney">Set</button></div>
+					<span class="sb-hint" id="sc-moneydone"></span>
+				</div>
+				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sb-name">🎁 Unlock every item</div>
 					<div class="sb-hint">Adds every item in the game to your own inventory (saved to your account).</div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-allitems">Unlock all items</button><span class="sb-hint" id="sc-itemsdone"></span></div>
@@ -260,6 +265,7 @@
 				guard(listKind);
 			} else if (name === 'cheats') {
 				guard(fillParts);
+				guard(showMoney);
 			}
 		};
 		$('tabs').addEventListener('click', (e) => {
@@ -822,6 +828,32 @@
 			g.InventoryRemove(player(), 'ItemScript', false);
 			pushLook(g);
 			$('invisdone').textContent = '🙂 Visible again.';
+		});
+
+		// ---- Money: sets your own money and saves it to your account (the game's own sync).
+		const showMoney = () => {
+			const me = player();
+			$('moneynow').textContent = me && Number.isFinite(me.Money) ? `(you have $${me.Money})` : '';
+		};
+		onClick('setmoney', () => {
+			const me = player();
+			if (!me) {
+				fail('Log in first.');
+				return;
+			}
+			if (typeof w.ServerPlayerSync !== 'function') {
+				fail('⚠ The game changed (ServerPlayerSync is gone): this cheat is off until SlimeCheat is updated.');
+				return;
+			}
+			const amount = Number(value('money').replace(/[\s,$]/g, ''));
+			if (!Number.isInteger(amount) || amount < 0 || amount > 999999999) {
+				$('moneydone').textContent = 'A whole number from 0 to 999999999.';
+				return;
+			}
+			me.Money = amount;
+			w.ServerPlayerSync();
+			showMoney();
+			$('moneydone').textContent = `💰 Money set to $${amount}.`;
 		});
 
 		let sureItems = 0;
