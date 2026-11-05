@@ -14,6 +14,9 @@
 	const BASE = typeof w.SlimeCheatServer === 'string' ? w.SlimeCheatServer : 'https://song-upload.slimebeep-relay.workers.dev';
 	/** Who SlimeBeep proofs are made for (the Worker checks the same name). */
 	const AUDIENCE = 'slimecheat';
+	/** The slime hacker, 64 px, for SlimeBeep's tab button (a data: URL: SlimeBeep takes no web addresses). */
+	const ICON =
+		'data:image/webp;base64,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';
 	/** Where to get SlimeBeep. */
 	const SLIMEBEEP_URL = 'https://proudkiller0015.github.io/slimebeep/install.html';
 	/** FUSAM, the game's add-on manager (SlimeBeep is in it). */
@@ -78,6 +81,8 @@
 		return el;
 	};
 
+	/** Whether the needs-SlimeBeep note was shown (once; it's closed by hand or when SlimeBeep turns up). */
+	let needShown = false;
 	/** Without SlimeBeep: a small note saying SlimeCheat needs it, with where to get it. */
 	const needSlimeBeep = () => {
 		if (document.getElementById('sc-need')) {
@@ -807,20 +812,23 @@
 	};
 
 	// Waits for SlimeBeep, then adds the panel; without it, says SlimeCheat needs it.
+	// It keeps waiting however late SlimeBeep loads (FUSAM may load it after login): the note only shows while
+	// it's missing, and goes away once SlimeBeep is there.
 	const startedAt = Date.now();
 	const timer = setInterval(() => {
 		try {
 			const api = slimeBeep();
 			if (api) {
 				clearInterval(timer);
-				api.addPanel({ id: 'slimecheat', icon: '💻', title: 'SlimeCheat: hack panel', mount });
-			} else if (Date.now() - startedAt > WAIT_SLIMEBEEP && document.body) {
-				clearInterval(timer);
+				document.getElementById('sc-need')?.remove();
+				api.addPanel({ id: 'slimecheat', icon: '💻', image: ICON, title: 'SlimeCheat: hack panel', mount });
+			} else if (Date.now() - startedAt > WAIT_SLIMEBEEP && document.body && !needShown) {
+				needShown = true;
 				needSlimeBeep();
 			}
 		} catch (e) {
 			clearInterval(timer);
 			console.warn('SlimeCheat:', e);
 		}
-	}, 500);
+	}, 1000);
 })();

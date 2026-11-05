@@ -678,10 +678,15 @@ async function browserChecks() {
 		}, BASE);
 		await page.addScriptTag({ content: script });
 		await page.waitForFunction(() => !!document.getElementById('su-host').shadowRoot.getElementById('sc-root'));
-		const added = await page.evaluate(() => ({ id: window.added.id, icon: window.added.icon, title: window.added.title }));
+		const added = await page.evaluate(() => ({
+			id: window.added.id,
+			icon: window.added.icon,
+			title: window.added.title,
+			image: /^data:image\/webp;base64,/.test(window.added.image) && window.added.image.length < 12000,
+		}));
 		check(
 			'SlimeCheat adds its hack panel to SlimeBeep',
-			added.id === 'slimecheat' && added.icon === '💻' && /SlimeCheat/.test(added.title),
+			added.id === 'slimecheat' && added.icon === '💻' && added.image && /SlimeCheat/.test(added.title),
 			added,
 		);
 
@@ -1066,6 +1071,22 @@ async function browserChecks() {
 				need.links.includes('https://sidiousious.gitlab.io/bc-addon-loader/'),
 			need,
 		);
+		// SlimeBeep turning up late (after the note): SlimeCheat still plugs in, and the note goes.
+		const late = await lone.evaluate(async () => {
+			let got = null;
+			/** @type {any} */ (window).SlimeBeep = {
+				api: {
+					addPanel(/** @type {any} */ p) {
+						got = p.id;
+						return { open() {}, remove() {} };
+					},
+					proveIdentity: async () => null,
+				},
+			};
+			await new Promise((r) => setTimeout(r, 1500));
+			return { got, note: !!document.getElementById('sc-need') };
+		});
+		check('SlimeBeep loading late still gets the panel, and the note goes away', late.got === 'slimecheat' && !late.note, late);
 		await lone.close();
 		check('every upload signed in with a SlimeBeep proof', (await page.evaluate(() => /** @type {any} */ (window).proofs)) > 5);
 		check('no page errors', errors.length === 0, errors);
