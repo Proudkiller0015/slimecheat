@@ -142,12 +142,13 @@
 			#sc-root select, #sc-root input.sb-search { margin: 0; }
 			#sc-root label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; flex: 1; }
 			#sc-root [hidden] { display: none !important; }
+			#sc-root label.sc-check { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; margin-top: 6px; cursor: pointer; }
 		</style>
 		<div id="sc-root">
 			<div class="sc-tabs" id="sc-tabs">
 				<button class="sb-pill" data-page="songs">🎵 Songs</button><button class="sb-pill" data-page="images">🖼 Images</button>
 				<button class="sb-pill" data-page="files">📁 My files</button><button class="sb-pill" data-page="dice">🎲 Dice</button>
-				<button class="sb-pill" data-page="cheats">🔓 Cheats</button>
+				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
 			</div>
 			<div class="sc-page" id="sc-upload">
 				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 only, up to 500 MB</span></div>
@@ -188,6 +189,13 @@
 					<div class="sb-name">🎁 Unlock every item</div>
 					<div class="sb-hint">Adds every item in the game to your own inventory (saved to your account).</div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-allitems">Unlock all items</button><span class="sb-hint" id="sc-itemsdone"></span></div>
+				</div>
+			</div>
+			<div class="sc-page" id="sc-settings" hidden>
+				<div class="sb-hint">Cheats work fully by default. These settings hold some of them back.</div>
+				<div class="sb-row" style="display:block;cursor:default">
+					<div class="sb-name">🔥 Lock burner</div>
+					<label class="sc-check"><input type="checkbox" id="sc-protect"> 🛡 Leave Owner, Lover, Family, Mistress and Exclusive locks alone (and the items they lock)</label>
 				</div>
 			</div>
 			<div class="sc-err" id="sc-err" hidden></div>
@@ -253,7 +261,7 @@
 				$('done').hidden = true;
 			}
 			$('upload').hidden = !upload;
-			for (const p of ['files', 'dice', 'cheats']) {
+			for (const p of ['files', 'dice', 'cheats', 'settings']) {
 				$(p).hidden = name !== p;
 			}
 			for (const tab of root.querySelectorAll('#sc-tabs [data-page]')) {
@@ -719,6 +727,37 @@
 				g.ChatRoomCharacterUpdate(player());
 			}
 		};
+		// ---- Protected locks (a setting, off by default, kept in this browser): with it on, the burner leaves the
+		// locks that belong to someone else alone, and won't take off an item they hold.
+		const PROTECT_KEY = 'slimecheat.protectLocks';
+		const protectBox = /** @type {HTMLInputElement} */ ($('protect'));
+		try {
+			protectBox.checked = localStorage.getItem(PROTECT_KEY) === '1';
+		} catch (e) {
+			/* no storage: off */
+		}
+		protectBox.addEventListener('change', () =>
+			guard(() => {
+				localStorage.setItem(PROTECT_KEY, protectBox.checked ? '1' : '0');
+				fillParts();
+			}),
+		);
+		/**
+		 * The name of an item's lock when it is one the setting protects (Owner, Lovers, Family, Mistress or
+		 * Exclusive padlocks, and any lock only an owner, lover or family member may use), else ''.
+		 * @param {any} g
+		 * @param {any} it
+		 */
+		const protectedLock = (g, it) => {
+			const lock = protectBox.checked ? g.InventoryGetLock(it) : null;
+			const a = lock && lock.Asset;
+			if (!a) {
+				return '';
+			}
+			const kept = /^(Owner|Lovers|Family|Mistress|Exclusive)/.test(a.Name || '') || a.OwnerOnly || a.LoverOnly || a.FamilyOnly;
+			return kept ? a.Description || a.Name : '';
+		};
+
 		/** Fills the body part list: every item slot you have something in, locked ones marked. */
 		const fillParts = () => {
 			const g = game();
@@ -731,9 +770,11 @@
 			for (const it of items) {
 				const lock = g.InventoryGetLock(it);
 				const part = it.Asset.Group.Description || it.Asset.Group.Name;
-				const opt = /** @type {HTMLOptionElement} */ (
-					make('option', '', `${lock ? '🔒 ' : ''}${part}: ${it.Asset.Description || it.Asset.Name}`)
-				);
+				let mark = lock ? '🔒 ' : '';
+				if (protectedLock(g, it)) {
+					mark = '🛡 ';
+				}
+				const opt = /** @type {HTMLOptionElement} */ (make('option', '', `${mark}${part}: ${it.Asset.Description || it.Asset.Name}`));
 				opt.value = it.Asset.Group.Name;
 				select.append(opt);
 			}
@@ -753,6 +794,10 @@
 				$('burnt').textContent = 'That one has no lock.';
 				return;
 			}
+			if (protectedLock(g, item)) {
+				$('burnt').textContent = `🛡 Left alone: it has a ${protectedLock(g, item)} (⚙ Settings › 🛡 is on).`;
+				return;
+			}
 			g.InventoryUnlock(player(), item, false);
 			pushLook(g);
 			$('burnt').textContent = `🔥 Lock burnt off: ${item.Asset.Description || item.Asset.Name}`;
@@ -765,6 +810,10 @@
 			if (!g || !item) {
 				return;
 			}
+			if (protectedLock(g, item)) {
+				$('burnt').textContent = `🛡 Left on: it has a ${protectedLock(g, item)} (⚙ Settings › 🛡 is on).`;
+				return;
+			}
 			g.InventoryRemove(player(), group, false);
 			pushLook(g);
 			$('burnt').textContent = `✂ Taken off: ${item.Asset.Description || item.Asset.Name}`;
@@ -775,16 +824,23 @@
 			if (!g) {
 				return;
 			}
-			const locked = worn().filter((it) => g.InventoryGetLock(it));
+			const all = worn().filter((it) => g.InventoryGetLock(it));
+			const kept = all.filter((it) => protectedLock(g, it));
+			const locked = all.filter((it) => !protectedLock(g, it));
 			for (const it of locked) {
 				g.InventoryUnlock(player(), it, false);
 			}
 			if (locked.length) {
 				pushLook(g);
 			}
-			$('burnt').textContent = locked.length
-				? `🔥 ${locked.length} lock${locked.length > 1 ? 's' : ''} burnt off`
-				: 'Nothing on you is locked.';
+			const left = kept.length ? ` (🛡 ${kept.length} left alone)` : '';
+			let said = 'Nothing on you is locked.';
+			if (locked.length) {
+				said = `🔥 ${locked.length} lock${locked.length > 1 ? 's' : ''} burnt off${left}`;
+			} else if (kept.length) {
+				said = `🛡 Only protected locks on you: ${kept.length} left alone.`;
+			}
+			$('burnt').textContent = said;
 			fillParts();
 		});
 		// ---- Invisible: the game's Script item (group ItemScript) with every body group in its Hide list.

@@ -731,8 +731,8 @@ async function browserChecks() {
 		check('the panel opens on Songs with Upload song', (await visible('pick')) && (await text('pick')) === '🎵 Upload song');
 		const tabs = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-tabs [data-page]')].map((t) => t.textContent).join(' | '));
 		check(
-			'the pages are Songs | Images | My files | Dice | Cheats (no settings)',
-			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats',
+			'the pages are Songs | Images | My files | Dice | Cheats | ⚙ Settings',
+			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | ⚙',
 			tabs,
 		);
 		check(
@@ -1037,6 +1037,66 @@ async function browserChecks() {
 			first.inv === 0 && items.inv === 'Cuffs,Gag,Rope' && /3 new items/.test(await text('itemsdone')),
 			[first, items],
 		);
+		// 🛡 Protected locks: off by default; on, Owner/Mistress-style locks stay (burn, take off and burn all).
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			const g = (/** @type {string} */ n, /** @type {string} */ d) => ({ Name: n, Description: d, Category: 'Item', Family: 'Female3DCG' });
+			w.Player.Appearance = [
+				{
+					Asset: { Name: 'Collar', Description: 'Collar', Group: g('ItemNeck', 'Neck') },
+					lockAsset: { Name: 'OwnerPadlock', Description: 'Owner Padlock' },
+				},
+				{
+					Asset: { Name: 'Cuffs', Description: 'Leather Cuffs', Group: g('ItemArms', 'Arms') },
+					lockAsset: { Name: 'MetalPadlock', Description: 'Metal Padlock' },
+				},
+				{
+					Asset: { Name: 'Belt', Description: 'Chastity Belt', Group: g('ItemPelvis', 'Pelvis') },
+					lockAsset: { Name: 'MistressTimerPadlock', Description: 'Mistress Timer Padlock' },
+				},
+			];
+			w.InventoryGetLock = (/** @type {any} */ i) => (i.lockAsset ? { Asset: i.lockAsset } : null);
+			w.InventoryUnlock = (/** @type {any} */ C, /** @type {any} */ i) => {
+				i.lockAsset = null;
+				w.calls.push(`unlock ${i.Asset.Name}`);
+			};
+			w.calls = [];
+		});
+		await tab('⚙');
+		const protectOff = await inPanel((h) => h.shadowRoot.getElementById('sc-protect').checked);
+		await (await el('protect')).click();
+		await tab('Cheats');
+		const marks = await inPanel((h) => [...h.shadowRoot.getElementById('sc-part').options].map((o) => o.textContent).join('|'));
+		await inPanel((h) => {
+			h.shadowRoot.getElementById('sc-part').value = 'ItemNeck';
+		});
+		await (await el('unlock')).click();
+		const keptOne = await text('burnt');
+		await (await el('remove')).click();
+		const keptOn = await text('burnt');
+		await (await el('burnall')).click();
+		const burnAll = { text: await text('burnt'), calls: await page.evaluate(() => /** @type {any} */ (window).calls.join(',')) };
+		const saved = await page.evaluate(() => localStorage.getItem('slimecheat.protectLocks'));
+		check(
+			'⚙ Settings › 🛡 is off by default; on, it marks and leaves Owner and Mistress locks alone (burn, take off, burn every lock) and is remembered',
+			!protectOff &&
+				marks === '🛡 Neck: Collar|🔒 Arms: Leather Cuffs|🛡 Pelvis: Chastity Belt' &&
+				/Left alone: it has a Owner Padlock/.test(keptOne) &&
+				/Left on/.test(keptOn) &&
+				burnAll.calls === 'unlock Cuffs,refresh,room' &&
+				/1 lock burnt off \(🛡 2 left alone\)/.test(burnAll.text) &&
+				saved === '1',
+			[protectOff, marks, keptOne, keptOn, burnAll, saved],
+		);
+		await tab('⚙');
+		await (await el('protect')).click();
+		await tab('Cheats');
+		await page.evaluate(() => {
+			/** @type {any} */ (window).calls = [];
+		});
+		await (await el('burnall')).click();
+		const offAgain = await page.evaluate(() => /** @type {any} */ (window).calls.join(','));
+		check('with 🛡 off again, every lock burns', offAgain === 'unlock Collar,unlock Belt,refresh,room', offAgain);
 		// Invisible: asks for the Scripts setting first, then wears the Script item hiding every body group.
 		await page.evaluate(() => {
 			const w = /** @type {any} */ (window);
@@ -1116,7 +1176,7 @@ async function browserChecks() {
 			/** @type {any} */ (window).InventoryUnlock = () => {
 				throw new Error('boom');
 			};
-			/** @type {any} */ (window).Player.Appearance[0].lock = true;
+			/** @type {any} */ (window).Player.Appearance[0].lockAsset = { Name: 'MetalPadlock', Description: 'Metal Padlock' };
 		});
 		await (await el('parts')).click();
 		await (await el('burnall')).click();

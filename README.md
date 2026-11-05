@@ -23,6 +23,8 @@ Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed
 - **🎲 Dice**: rolls into the room exactly like `/dice`, with the result you type (or a fair roll).
 - **🔓 Cheats**, on yourself only:
   - 🔥 **Lock burner**: pick a body part and burn its lock off, take the item off, or burn every lock.
+  - In **⚙ Settings** you can hold cheats back; all off by default. 🛡 makes the lock burner leave Owner, Lover,
+    Family, Mistress and Exclusive locks alone (and the items they lock).
   - 👻 **Invisible**: hides all of you from everyone in the room with the game's own Script item (turn on
     Settings › Scripts › Hide › Self first); **Visible again** undoes it.
   - 💰 **Money**: set your money to any amount (saved to your account).
