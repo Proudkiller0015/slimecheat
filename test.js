@@ -763,6 +763,16 @@ async function browserChecks() {
 		check('my song.mp3 uploads', !(await pick(files.song)), await text('err'));
 		const link = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
 		check('the link shows and ends in .mp3', link.startsWith(`${BASE}/`) && link.endsWith('.mp3'), link);
+		const recent = async (/** @type {string} */ head) => {
+			await page.waitForFunction(
+				(hd) => document.getElementById('su-host').shadowRoot.getElementById('sc-recenthead').textContent === hd,
+				{ timeout: 10000 },
+				head,
+			);
+			return inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-recent .sc-file b')].map((b) => b.textContent).join('|'));
+		};
+		const songsListed = await recent('Your songs (2)');
+		check('under the upload button, Songs lists my songs, newest first', songsListed === 'my song.mp3|mid.mp3', songsListed);
 		check(
 			'the panel says the link lasts as long as the file',
 			/lasts as long as the file/.test(await inPanel((h) => h.shadowRoot.getElementById('sc-done').textContent)),
@@ -810,6 +820,8 @@ async function browserChecks() {
 		check('room background.png uploads', !(await pick(files.png)), await text('err'));
 		const imgLink = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
 		check('the image link shows and ends in .png', new RegExp(`^${BASE}/[0-9a-f]{32}\\.png$`).test(imgLink), imgLink);
+		const imagesListed = await recent('Your images (1)');
+		check('...and Images lists only my images', imagesListed === 'room background.png', imagesListed);
 		check(
 			'...and says how long it lasts',
 			/lasts as long as the file/.test(await inPanel((h) => h.shadowRoot.getElementById('sc-done').textContent)),
@@ -845,17 +857,17 @@ async function browserChecks() {
 		check('back on Songs: Upload song again', (await text('pick')) === '🎵 Upload song');
 
 		await tab('My files');
-		await page.waitForFunction(() => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-file').length > 0);
+		await page.waitForFunction(() => document.getElementById('su-host').shadowRoot.querySelectorAll('#sc-list .sc-file').length > 0);
 		const rows = () =>
 			inPanel((h) =>
-				[...h.shadowRoot.querySelectorAll('.sc-file')].map((r) => ({
+				[...h.shadowRoot.querySelectorAll('#sc-list .sc-file')].map((r) => ({
 					name: r.querySelector('b').textContent,
 					info: r.querySelector('.sb-sub').textContent,
 					thumb: r.querySelector('img') ? r.querySelector('img').src : '',
 				})),
 			);
 		await page.waitForFunction(() => {
-			const img = document.getElementById('su-host').shadowRoot.querySelector('.sc-file img');
+			const img = document.getElementById('su-host').shadowRoot.querySelector('#sc-list .sc-file img');
 			return img && img.complete && img.naturalWidth > 0;
 		});
 		const shown = await rows();
@@ -872,12 +884,14 @@ async function browserChecks() {
 			shown,
 		);
 		check('My files shows the storage used', /^Used [\d.]+ MB of 400\.0 MB$/.test(await text('used')), await text('used'));
-		await inPanel((h) => h.shadowRoot.querySelectorAll('.sc-file .sc-copylink')[1].click());
+		await inPanel((h) => h.shadowRoot.querySelectorAll('#sc-list .sc-file .sc-copylink')[1].click());
 		check("a song row's Copy link copies its link", (await page.evaluate(() => navigator.clipboard.readText())) === link);
-		await inPanel((h) => h.shadowRoot.querySelector('.sc-file .sc-copylink').click());
+		await inPanel((h) => h.shadowRoot.querySelector('#sc-list .sc-file .sc-copylink').click());
 		check("the image row's Copy link copies its link", (await page.evaluate(() => navigator.clipboard.readText())) === imgLink);
-		const delBtn = (/** @type {number} */ i) => inPanel((h, n) => h.shadowRoot.querySelectorAll('.sc-file .sc-del')[n].textContent, i);
-		const delClick = (/** @type {number} */ i) => inPanel((h, n) => h.shadowRoot.querySelectorAll('.sc-file .sc-del')[n].click(), i);
+		const delBtn = (/** @type {number} */ i) =>
+			inPanel((h, n) => h.shadowRoot.querySelectorAll('#sc-list .sc-file .sc-del')[n].textContent, i);
+		const delClick = (/** @type {number} */ i) =>
+			inPanel((h, n) => h.shadowRoot.querySelectorAll('#sc-list .sc-file .sc-del')[n].click(), i);
 		await delClick(0);
 		check(
 			'Delete asks "Sure?" first and keeps the image',
@@ -885,7 +899,7 @@ async function browserChecks() {
 		);
 		await delClick(0);
 		await page.waitForFunction(
-			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-file').length === n - 1,
+			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('#sc-list .sc-file').length === n - 1,
 			{},
 			shown.length,
 		);
@@ -893,7 +907,7 @@ async function browserChecks() {
 		await delClick(0);
 		await delClick(0);
 		await page.waitForFunction(
-			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-file').length === n - 2,
+			(n) => document.getElementById('su-host').shadowRoot.querySelectorAll('#sc-list .sc-file').length === n - 2,
 			{},
 			shown.length,
 		);
@@ -919,8 +933,8 @@ async function browserChecks() {
 		});
 		check("another player's upload goes in as theirs", put777.status === 200, put777.status);
 		await (await el('refresh')).click();
-		await page.waitForFunction(() => document.getElementById('su-host').shadowRoot.querySelectorAll('.sc-user').length === 2);
-		const heads = await inPanel((h) => [...h.shadowRoot.querySelectorAll('.sc-user')].map((x) => x.textContent));
+		await page.waitForFunction(() => document.getElementById('su-host').shadowRoot.querySelectorAll('#sc-list .sc-user').length === 2);
+		const heads = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-list .sc-user')].map((x) => x.textContent));
 		check(
 			"the owner's My files shows everyone's files grouped by player, theirs first, with no button to press",
 			heads[0] === 'You #4242 · 1 file' &&

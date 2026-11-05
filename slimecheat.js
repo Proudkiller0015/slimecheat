@@ -147,6 +147,8 @@
 				<input type="file" id="sc-file" accept=".mp3,audio/mpeg" hidden>
 				<div id="sc-prog" hidden><div class="sc-bar"><div></div></div><div class="sc-line"><span class="sb-hint" id="sc-pct"></span><button class="sb-pill" id="sc-stop">Cancel</button></div></div>
 				<div id="sc-done" hidden><input class="sb-search" id="sc-link" readonly aria-label="Link"><div class="sc-line"><button class="sb-go" id="sc-copy">Copy link</button><span class="sb-hint" id="sc-copied"></span></div><span class="sb-hint" id="sc-lasts"></span></div>
+				<div class="sc-user" id="sc-recenthead"></div>
+				<div id="sc-recent"></div>
 			</div>
 			<div class="sc-page" id="sc-files" hidden>
 				<div class="sc-line"><span class="sb-hint" id="sc-used" style="flex:1"></span><button class="sb-pill" id="sc-refresh" title="Refresh">↻</button></div>
@@ -242,6 +244,8 @@
 			}
 			if (name === 'files') {
 				guard(listFiles);
+			} else if (upload) {
+				guard(listKind);
 			} else if (name === 'cheats') {
 				guard(fillParts);
 			}
@@ -450,8 +454,9 @@
 			show(0);
 			const done = (/** @type {string} */ url) => {
 				link.value = url || '';
-				$('lasts').textContent = 'The link lasts as long as the file: see 📁 My files.';
+				$('lasts').textContent = 'The link lasts as long as the file: see the list below.';
 				$('done').hidden = false;
+				guard(listKind);
 			};
 			try {
 				if (image) {
@@ -525,7 +530,7 @@
 					clearTimeout(sure);
 					del.disabled = true;
 					await call('DELETE', `/upload/files/${file.url.split('/').pop()}`, new AbortController().signal);
-					await listFiles();
+					await ($('files').hidden ? listKind() : listFiles());
 				}),
 			);
 			const buttons = make('div', 'sc-line');
@@ -587,6 +592,28 @@
 			}
 		};
 		onClick('refresh', listFiles);
+
+		/** Under the upload button: your own songs (on Songs) or images (on Images), newest first. */
+		const listKind = async () => {
+			const want = kind === 'images' ? 'image' : 'song';
+			const what = kind === 'images' ? 'images' : 'songs';
+			/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number }[] }} */
+			let answer;
+			try {
+				answer = await call('GET', '/upload/files', new AbortController().signal);
+			} catch (e) {
+				// Before login (or offline) the list just waits; the upload button says what's wrong when used.
+				$('recenthead').textContent = '';
+				$('recent').replaceChildren();
+				return;
+			}
+			if ((kind === 'images' ? 'image' : 'song') !== want) {
+				return;
+			}
+			const mine = answer.files.filter((f) => f.kind === want);
+			$('recenthead').textContent = mine.length ? `Your ${what} (${mine.length})` : `No ${what} uploaded yet.`;
+			$('recent').replaceChildren(...mine.map(fileRow));
+		};
 
 		// ---- Dice
 		onClick('droll', () => {
