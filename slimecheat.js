@@ -949,6 +949,137 @@
 		page('songs');
 	};
 
+	// ---- !burn: the owner's "BC Fire Burn" (v4.1), its burn kept as written. Hidden: no button; with an item slot
+	// selected, type !burn in the game's chat box and press Enter. The line never reaches the room.
+	//
+	// DISCLAIMER from the mod maker: using !burn on another player requires their explicit consent. It can remove
+	// items others are wearing, locked or not, so only ever use it on someone who has clearly agreed to it.
+	// This is a rule for whoever uses it, not a limit in the code.
+	/* global CharacterGetCurrent, ServerPlayerIsInChatRoom, ServerChatRoomGetAllowItem, CharacterNickname, InventoryGet,
+	   InventoryRemove, ChatRoomCharacterUpdate, ServerPlayerAppearanceSync, ChatRoomCharacterItemUpdate */
+	// Kept as the owner wrote it, so two style rules are off for this block only.
+	/* eslint-disable curly, prefer-template */
+	const fireBurn = (() => {
+		// Your own words. {item} is the item's name, {target} who it was on.
+		const SAY = {
+			self: 'sets the {item} on fire and lets it burn away.',
+			other: 'burns the {item} off {target}.',
+		};
+
+		const TOAST_ID = 'bc-fire-toast';
+
+		function showToast(/** @type {string} */ text) {
+			let el = document.getElementById(TOAST_ID);
+			if (el) el.remove();
+			el = document.createElement('div');
+			el.id = TOAST_ID;
+			el.textContent = text;
+			el.style.cssText = [
+				'position:fixed',
+				'left:50%',
+				'top:20%',
+				'transform:translateX(-50%)',
+				'z-index:2147483647',
+				'background:rgba(0,0,0,0.85)',
+				'color:#fff',
+				'padding:12px 18px',
+				'border-radius:10px',
+				'font-size:16px',
+				'font-weight:bold',
+				'pointer-events:none',
+				'max-width:80%',
+				'text-align:center',
+			].join(';');
+			document.body.appendChild(el);
+			const shown = el;
+			setTimeout(function () {
+				shown.remove();
+			}, 2500);
+		}
+
+		// One emote to the room; the server sends it back, so it shows once for you too.
+		function emote(/** @type {string} */ msg) {
+			ServerSend('ChatRoomChat', { Content: msg, Type: 'Emote' });
+		}
+
+		function burn() {
+			if (typeof CurrentScreen === 'undefined' || CurrentScreen !== 'ChatRoom' || !ServerPlayerIsInChatRoom()) {
+				showToast('Burn works in a chat room.');
+				return;
+			}
+
+			const C = CharacterGetCurrent();
+			if (!C) {
+				showToast('Open someone first (or yourself).');
+				return;
+			}
+
+			const groupName = C.FocusGroup && C.FocusGroup.Name;
+			if (!groupName) {
+				showToast('Click an item slot first, then Burn.');
+				return;
+			}
+
+			const item = InventoryGet(C, groupName);
+			if (!item || !item.Asset) {
+				showToast('Nothing worn there.');
+				return;
+			}
+			if (!item.Asset.Group.AllowNone) {
+				showToast("That's part of the body, not something worn.");
+				return;
+			}
+
+			const self = C.IsPlayer();
+			if (!self) {
+				// Lock check removed
+				if (!ServerChatRoomGetAllowItem(Player, C)) {
+					showToast(CharacterNickname(C) + " doesn't allow you to use items on them.");
+					return;
+				}
+			}
+
+			const itemName = (item.Craft && item.Craft.Name) || item.Asset.Description || item.Asset.Name;
+			InventoryRemove(C, groupName, true);
+
+			if (self) {
+				// Tell the room, and save it to your account so it doesn't come back when you rejoin.
+				ChatRoomCharacterUpdate(Player);
+				ServerPlayerAppearanceSync();
+			} else {
+				ChatRoomCharacterItemUpdate(C, groupName);
+			}
+
+			const msg = (self ? SAY.self : SAY.other).replace('{item}', itemName).replace('{target}', CharacterNickname(C));
+			emote(msg);
+		}
+
+		return () => {
+			try {
+				burn();
+			} catch (err) {
+				console.error('[Fire Burn]', err);
+				showToast('Burn failed: ' + /** @type {Error} */ (err).message);
+			}
+		};
+	})();
+	/* eslint-enable curly, prefer-template */
+	// Caught before the game's own chat handler (capture), so "!burn" is never sent.
+	document.addEventListener(
+		'keydown',
+		(e) => {
+			const box = /** @type {HTMLInputElement | null} */ (e.target instanceof HTMLElement && e.target.id === 'InputChat' ? e.target : null);
+			if (!box || e.key !== 'Enter' || e.shiftKey || box.value.trim().toLowerCase() !== '!burn') {
+				return;
+			}
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			box.value = '';
+			fireBurn();
+		},
+		true,
+	);
+
 	// Waits for SlimeBeep, then adds the panel; without it, says SlimeCheat needs it.
 	// It keeps waiting however late SlimeBeep loads (FUSAM may load it after login): the note only shows while
 	// it's missing, and goes away once SlimeBeep is there.

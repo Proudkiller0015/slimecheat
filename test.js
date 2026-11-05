@@ -1181,6 +1181,54 @@ async function browserChecks() {
 			(await page.evaluate(() => window.Player.Money)) === 1e99,
 			await text('moneydone'),
 		);
+		// !burn in the game's chat box, with a slot selected: burns that item, emotes, and the line is never sent.
+		const fired = await page.evaluate(async () => {
+			const w = /** @type {any} */ (window);
+			const sent = [];
+			let gameSaw = 0;
+			const gag = { Asset: { Name: 'BallGag', Description: 'Ball Gag', Group: { Name: 'ItemMouth', AllowNone: true } } };
+			const me = { IsPlayer: () => true, FocusGroup: { Name: 'ItemMouth' }, Appearance: [gag] };
+			Object.assign(w, {
+				CurrentScreen: 'ChatRoom',
+				ServerPlayerIsInChatRoom: () => true,
+				CharacterGetCurrent: () => me,
+				InventoryGet: (/** @type {any} */ C, /** @type {string} */ g) =>
+					C.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === g) || null,
+				InventoryRemove: (/** @type {any} */ C, /** @type {string} */ g) => {
+					C.Appearance = C.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== g);
+				},
+				ChatRoomCharacterUpdate: () => sent.push('update'),
+				ServerPlayerAppearanceSync: () => sent.push('sync'),
+				ServerSend: (/** @type {string} */ m, /** @type {any} */ d) => sent.push(`${m}:${d.Type}:${d.Content}`),
+				CharacterNickname: () => 'Sam',
+			});
+			const box = document.createElement('input');
+			box.id = 'InputChat';
+			document.body.append(box);
+			// The game's own handler would send the line.
+			box.addEventListener('keydown', (e) => {
+				if (e.key === 'Enter') {
+					gameSaw++;
+				}
+			});
+			box.value = '!burn';
+			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			const r = { left: me.Appearance.length, sent: sent.join('|'), box: box.value, gameSaw };
+			box.value = 'hello';
+			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			r.normal = gameSaw;
+			box.remove();
+			return r;
+		});
+		check(
+			'!burn with a slot selected burns that item, saves, emotes, and is never sent; other lines go through',
+			fired.left === 0 &&
+				fired.sent === 'update|sync|ChatRoomChat:Emote:sets the Ball Gag on fire and lets it burn away.' &&
+				fired.box === '' &&
+				fired.gameSaw === 0 &&
+				fired.normal === 1,
+			fired,
+		);
 		// A game function that throws: the error shows in SlimeCheat and nothing breaks.
 		await page.evaluate(() => {
 			/** @type {any} */ (window).InventoryUnlock = () => {
