@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.0.0';
+	const VERSION = '2.3.0';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
