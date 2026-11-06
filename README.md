@@ -16,7 +16,7 @@ too) or a userscript ([direct link](https://proudkiller0015.github.io/slimecheat
 Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed script only loads
 `slimecheat.js` from this repo on every game load.
 
-- **🎵 Songs / 🖼 Images**: upload an mp3 (up to 500 MB) or a room background (.jpg, .png, .webp, up to 100 MB)
+- **🎵 Songs / 🖼 Images**: upload an mp3 or m4a (up to 500 MB; an m4a named .mp3 is uploaded as the m4a it is) or a room background (.jpg, .png, .webp, up to 100 MB)
   and get a direct link to paste into your room's music or Image URL. Everyone in the room hears and sees
   it, add-on or not.
 - **📁 My files**: your uploads, newest first, with Copy link and Delete. Your files last 12 hours. (The owner can
@@ -59,7 +59,7 @@ owner's upload key. Anyone can play a song or load an image.
 | `PUT /upload/image?name=`            | the whole image, answers `{ url }`            | yes |
 | `GET /upload/files`                  | songs and images, newest first, storage used  | yes |
 | `DELETE /upload/files/<key>`         | deletes a song or an image                    | yes |
-| `GET /<key>.mp3` / `.jpg .png .webp` | the file (Range supported, open CORS)         | no  |
+| `GET /<key>.mp3` / `.m4a .jpg .png .webp` | the file (Range supported, open CORS)         | no  |
 
 - The key is a Worker secret, sent as `Authorization: Bearer <key>` and compared in constant time.
 - Upload calls answer CORS only for the game's sites (elementfx, bondageprojects.com, bondage-europe,
@@ -69,7 +69,7 @@ owner's upload key. Anyone can play a song or load an image.
   rate-limited r2.dev address.
 - It never fetches other sites: there is no URL parameter anywhere, only uploads into its own bucket.
 - Every part must be exactly the size the declared total allows, so the parts can't add up to more;
-  the first part must start like an mp3 (ID3 tag or an MPEG Layer III frame), or the upload is cancelled.
+  the first part must start like the song's type (mp3: an ID3 tag or an MPEG Layer III frame; m4a: an MP4 `ftyp` box), or the upload is cancelled.
 - An image over 25 MB goes up in 50 MB parts like a song (up to 100 MB; its first part must really be the
   type its name says). One of 25 MB or less goes in one request.
 - An image needs a .jpg/.jpeg/.png/.webp name, at most 25 MB in one request (by its Content-Length, before anything is
