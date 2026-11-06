@@ -1004,7 +1004,7 @@
 	// ---- !burn: the owner's "BC Fire Burn" (v4.1), its burn kept as written. Hidden: no button; with an item slot
 	// selected in the game, type !burn in a SlimeBeep chat box and press Enter (or Send). It is never sent.
 	//
-	// DISCLAIMER from the mod maker: using !burn on another player requires their explicit consent. It can remove
+	// DISCLAIMER from the mod maker: using !burn or !burnlock on another player requires their explicit consent. They remove
 	// items others are wearing, locked or not, so only ever use it on someone who has clearly agreed to it.
 	// This is a rule for whoever uses it, not a limit in the code.
 	/* global CharacterGetCurrent, ServerPlayerIsInChatRoom, ServerChatRoomGetAllowItem, CharacterNickname, InventoryGet,
@@ -1116,37 +1116,113 @@
 		};
 	})();
 	/* eslint-enable curly, prefer-template */
-	// SlimeBeep's chat box (#sb-text) with "!burn" in it: caught before SlimeBeep sends it (capture), on Enter
-	// or on its Send button, so it never goes out as a beep or a group message.
+
+	// ---- !burnlock: the lighter !burn. Same checks, on the selected slot, but it only burns the lock off: the item stays on.
+	const fireBurnLock = (() => {
+		const SAY = {
+			self: 'holds a flame to the lock on their {item} until it melts away.',
+			other: 'burns the lock off the {item} on {target}.',
+		};
+		const toast = (/** @type {string} */ text) => {
+			document.getElementById('bc-fire-toast')?.remove();
+			const el = document.createElement('div');
+			el.id = 'bc-fire-toast';
+			el.textContent = text;
+			el.style.cssText =
+				'position:fixed;left:50%;top:20%;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,0.85);color:#fff;padding:12px 18px;border-radius:10px;font-size:16px;font-weight:bold;pointer-events:none;max-width:80%;text-align:center';
+			document.body.appendChild(el);
+			setTimeout(() => el.remove(), 2500);
+		};
+		const burnLock = () => {
+			if (typeof CurrentScreen === 'undefined' || CurrentScreen !== 'ChatRoom' || !ServerPlayerIsInChatRoom()) {
+				toast('Burn works in a chat room.');
+				return;
+			}
+			const C = CharacterGetCurrent();
+			if (!C) {
+				toast('Open someone first (or yourself).');
+				return;
+			}
+			const groupName = C.FocusGroup && C.FocusGroup.Name;
+			if (!groupName) {
+				toast('Click an item slot first, then !burnlock.');
+				return;
+			}
+			const item = InventoryGet(C, groupName);
+			if (!item || !item.Asset) {
+				toast('Nothing worn there.');
+				return;
+			}
+			if (typeof w.InventoryGetLock !== 'function' || typeof w.InventoryUnlock !== 'function') {
+				toast('⚠ The game changed (InventoryUnlock is gone): !burnlock is off until SlimeCheat is updated.');
+				return;
+			}
+			if (!w.InventoryGetLock(item)) {
+				toast("There's no lock on that.");
+				return;
+			}
+			const self = C.IsPlayer();
+			if (!self && !ServerChatRoomGetAllowItem(Player, C)) {
+				toast(`${CharacterNickname(C)} doesn't allow you to use items on them.`);
+				return;
+			}
+			const itemName = (item.Craft && item.Craft.Name) || item.Asset.Description || item.Asset.Name;
+			w.InventoryUnlock(C, item, false);
+			if (self) {
+				// Tell the room, and save it to your account so the lock doesn't come back when you rejoin.
+				ChatRoomCharacterUpdate(Player);
+				ServerPlayerAppearanceSync();
+			} else {
+				ChatRoomCharacterItemUpdate(C, groupName);
+			}
+			ServerSend('ChatRoomChat', {
+				Content: (self ? SAY.self : SAY.other).replace('{item}', itemName).replace('{target}', CharacterNickname(C)),
+				Type: 'Emote',
+			});
+		};
+		return () => {
+			try {
+				burnLock();
+			} catch (err) {
+				console.error('[Fire Burn]', err);
+				toast(`Burn failed: ${/** @type {Error} */ (err).message}`);
+			}
+		};
+	})();
+
+	// SlimeBeep's chat box (#sb-text) with "!burn" or "!burnlock" in it: caught before SlimeBeep sends it (capture),
+	// on Enter or on its Send button, so it never goes out as a beep or a group message.
+	const BURNS = { '!burn': () => fireBurn(), '!burnlock': () => fireBurnLock() };
 	const burnTyped = () => {
 		const box = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('sb-text'));
-		return box && box.value.trim().toLowerCase() === '!burn' ? box : null;
+		const cmd = box ? box.value.trim().toLowerCase() : '';
+		return box && Object.hasOwn(BURNS, cmd) ? { box, run: BURNS[/** @type {'!burn' | '!burnlock'} */ (cmd)] } : null;
 	};
 	document.addEventListener(
 		'keydown',
 		(e) => {
-			const box = burnTyped();
-			if (!box || e.target !== box || e.key !== 'Enter' || e.shiftKey) {
+			const typed = burnTyped();
+			if (!typed || e.target !== typed.box || e.key !== 'Enter' || e.shiftKey) {
 				return;
 			}
 			e.preventDefault();
 			e.stopImmediatePropagation();
-			box.value = '';
-			fireBurn();
+			typed.box.value = '';
+			typed.run();
 		},
 		true,
 	);
 	document.addEventListener(
 		'click',
 		(e) => {
-			const box = burnTyped();
-			if (!box || !(e.target instanceof Element) || !e.target.closest('#sb-send')) {
+			const typed = burnTyped();
+			if (!typed || !(e.target instanceof Element) || !e.target.closest('#sb-send')) {
 				return;
 			}
 			e.preventDefault();
 			e.stopImmediatePropagation();
-			box.value = '';
-			fireBurn();
+			typed.box.value = '';
+			typed.run();
 		},
 		true,
 	);

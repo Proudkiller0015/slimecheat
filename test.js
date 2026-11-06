@@ -1339,6 +1339,54 @@ async function browserChecks() {
 				fired.gameChatIgnored,
 			fired,
 		);
+		// !burnlock: only the lock burns, the item stays; no lock = a note; never sent.
+		const lockBurnt = await page.evaluate(async () => {
+			const w = /** @type {any} */ (window);
+			const sent = [];
+			const cuffs = {
+				Asset: { Name: 'Cuffs', Description: 'Leather Cuffs', Group: { Name: 'ItemArms', AllowNone: true } },
+				lockAsset: { Name: 'MetalPadlock' },
+			};
+			const me = { IsPlayer: () => false, FocusGroup: { Name: 'ItemArms' }, Appearance: [cuffs] };
+			const keep = { InventoryGetLock: w.InventoryGetLock, InventoryUnlock: w.InventoryUnlock };
+			Object.assign(w, {
+				CurrentScreen: 'ChatRoom',
+				ServerPlayerIsInChatRoom: () => true,
+				CharacterGetCurrent: () => me,
+				InventoryGet: (/** @type {any} */ C, /** @type {string} */ g) =>
+					C.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === g) || null,
+				InventoryGetLock: (/** @type {any} */ i) => (i.lockAsset ? { Asset: i.lockAsset } : null),
+				InventoryUnlock: (/** @type {any} */ C, /** @type {any} */ i) => {
+					i.lockAsset = null;
+					sent.push('unlock');
+				},
+				ServerChatRoomGetAllowItem: () => true,
+				ChatRoomCharacterItemUpdate: (/** @type {any} */ C, /** @type {string} */ g) => sent.push(`item ${g}`),
+				ServerSend: (/** @type {string} */ m, /** @type {any} */ d) => sent.push(`${m}:${d.Type}:${d.Content}`),
+				CharacterNickname: () => 'Drone',
+			});
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			document.body.append(box);
+			box.value = '!burnlock';
+			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			const r = { stillOn: me.Appearance.length === 1, locked: !!cuffs.lockAsset, sent: sent.join('|'), box: box.value };
+			box.value = '!burnlock';
+			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			r.noLock = document.getElementById('bc-fire-toast')?.textContent;
+			box.remove();
+			Object.assign(w, keep);
+			return r;
+		});
+		check(
+			'!burnlock burns only the lock (the item stays), updates the room, emotes, is never sent; with no lock it says so',
+			lockBurnt.stillOn &&
+				!lockBurnt.locked &&
+				lockBurnt.sent === 'unlock|item ItemArms|ChatRoomChat:Emote:burns the lock off the Leather Cuffs on Drone.' &&
+				lockBurnt.box === '' &&
+				/no lock/.test(lockBurnt.noLock || ''),
+			lockBurnt,
+		);
 		// A game function that throws: the error shows in SlimeCheat and nothing breaks.
 		await page.evaluate(() => {
 			/** @type {any} */ (window).InventoryUnlock = () => {
