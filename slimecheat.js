@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.3.0';
+	const VERSION = '2.4.0';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
@@ -33,7 +33,7 @@
 	const TRIES = 3;
 	/** What each upload page takes. */
 	const KINDS = {
-		songs: { pick: '🎵 Upload song', hint: 'mp3 only, up to 500 MB', accept: '.mp3,audio/mpeg' },
+		songs: { pick: '🎵 Upload song', hint: 'mp3 or m4a, up to 500 MB', accept: '.mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a' },
 		images: {
 			pick: '🖼 Upload image',
 			hint: 'jpg, png or webp, up to 100 MB',
@@ -151,8 +151,8 @@
 				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
 			</div>
 			<div class="sc-page" id="sc-upload">
-				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 only, up to 500 MB</span></div>
-				<input type="file" id="sc-file" accept=".mp3,audio/mpeg" hidden>
+				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 or m4a, up to 500 MB</span></div>
+				<input type="file" id="sc-file" accept=".mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a" hidden>
 				<div id="sc-prog" hidden><div class="sc-bar"><div></div></div><div class="sc-line"><span class="sb-hint" id="sc-pct"></span><button class="sb-pill" id="sc-stop">Cancel</button></div></div>
 				<div id="sc-done" hidden><input class="sb-search" id="sc-link" readonly aria-label="Link"><div class="sc-line"><button class="sb-go" id="sc-copy">Copy link</button><span class="sb-hint" id="sc-copied"></span></div><span class="sb-hint" id="sc-lasts"></span></div>
 				<div class="sc-user" id="sc-recenthead"></div>
@@ -403,6 +403,17 @@
 			(b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) ||
 			(b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && ((b[1] >> 3) & 3) !== 1 && ((b[1] >> 1) & 3) === 1);
 		/**
+		 * The real type of a song from its first 12 bytes: 'mp3', 'm4a' (an MP4 file: 'ftyp' at byte 4), or ''.
+		 * @param {Uint8Array} b
+		 * @returns {'' | 'mp3' | 'm4a'}
+		 */
+		const songType = (b) => {
+			if (isMp3(b)) {
+				return 'mp3';
+			}
+			return String.fromCharCode(...b.slice(4, 8)) === 'ftyp' ? 'm4a' : '';
+		};
+		/**
 		 * The real type of an image from its first 12 bytes: 'jpg', 'png', 'webp', or '' for anything else.
 		 * @param {Uint8Array} b
 		 */
@@ -440,8 +451,8 @@
 		 * @param {File} file
 		 */
 		const refusal = async (file) => {
-			if (!/\.mp3$/i.test(file.name) || (file.type && !/^audio\/(mpeg|mp3)$/.test(file.type))) {
-				return `"${file.name}" is not an mp3. Only mp3 files can be uploaded.`;
+			if (!/\.(mp3|m4a)$/i.test(file.name) || (file.type && !/^audio\/(mpeg|mp3|mp4|x-m4a)$/.test(file.type))) {
+				return `"${file.name}" is not an mp3 or m4a. Only mp3 and m4a songs can be uploaded.`;
 			}
 			if (!file.size) {
 				return 'That file is empty.';
@@ -449,8 +460,8 @@
 			if (file.size > MAX_SONG && !isOwner) {
 				return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; songs can be at most 500 MB.`;
 			}
-			if (!isMp3(new Uint8Array(await file.slice(0, 4).arrayBuffer()))) {
-				return `"${file.name}" is not a real mp3 inside (only its name ends in .mp3). Only mp3 files can be uploaded.`;
+			if (!songType(new Uint8Array(await file.slice(0, 12).arrayBuffer()))) {
+				return `"${file.name}" is not a real mp3 or m4a inside (only its name says so).`;
 			}
 			return '';
 		};
@@ -494,7 +505,13 @@
 					done(url || '');
 					return;
 				}
-				started = await call('POST', '/upload', signal, { name: file.name, size: file.size });
+				// A song goes up under the type it really is: an m4a named .mp3 (common from downloaders) becomes .m4a.
+				let name = file.name;
+				if (!image) {
+					const type = songType(new Uint8Array(await file.slice(0, 12).arrayBuffer()));
+					name = name.replace(/\.(mp3|m4a)$/i, `.${type}`);
+				}
+				started = await call('POST', '/upload', signal, { name, size: file.size });
 				const { key, uploadId, partSize } = /** @type {{ key: string, uploadId: string, partSize: number }} */ (started);
 				const parts = [];
 				for (let n = 1, from = 0; from < file.size; n++, from += partSize) {

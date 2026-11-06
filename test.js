@@ -44,6 +44,28 @@ function mp3(size) {
 	return out;
 }
 
+/** A real 30 s m4a (AAC in MP4), made by ffmpeg; set in main. */
+let m4aSong = Buffer.alloc(0);
+/** Makes m4aSong with ffmpeg (a sine tone). */
+function makeM4a() {
+	const out = path.join(tmp, 'tone.m4a');
+	require('child_process').execFileSync('ffmpeg', [
+		'-v',
+		'error',
+		'-y',
+		'-f',
+		'lavfi',
+		'-i',
+		'sine=frequency=440:duration=30',
+		'-c:a',
+		'aac',
+		'-b:a',
+		'96k',
+		out,
+	]);
+	m4aSong = fs.readFileSync(out);
+}
+
 /**
  * Real 64x48 jpg, png and webp files of one colour, drawn by Chrome.
  */
@@ -480,6 +502,26 @@ async function workerChecks() {
 	const k2 = await listKept();
 	check('Undo puts it back on its timer', undo.status === 200 && k2 && k2.kept === false && typeof k2.expires === 'number', k2);
 	await emptyBucket();
+
+	// m4a songs: taken by their bytes, served as audio/mp4, listed as songs; mp3 bytes named .m4a are refused.
+	const m4a = await upload('drift.m4a', m4aSong);
+	const m4aGet = m4a.url ? await fetch(m4a.url) : null;
+	const m4aBytes = m4aGet ? Buffer.from(await m4aGet.arrayBuffer()) : Buffer.alloc(0);
+	const m4aListed = (await (await call('GET', '/upload/files', { key: KEY })).json()).files.find((f) => f.url === m4a.url);
+	check(
+		'an m4a uploads, its link ends in .m4a, it is served as audio/mp4 byte for byte and listed as a song',
+		m4a.res.ok &&
+			m4a.url.endsWith('.m4a') &&
+			m4aGet.headers.get('content-type') === 'audio/mp4' &&
+			m4aBytes.equals(m4aSong) &&
+			m4aListed?.kind === 'song',
+		{ status: m4a.res.status, url: m4a.url, type: m4aGet?.headers.get('content-type'), listed: m4aListed },
+	);
+	const fakeM4a = await upload('fake.m4a', mp3(1000));
+	check('mp3 bytes named .m4a: 415 at the first part', fakeM4a.res.status === 415, fakeM4a.res.status);
+	const m4aAsMp3 = await upload('wrong.mp3', m4aSong);
+	check('m4a bytes sent as .mp3 to the Worker: 415 (the panel renames it first)', m4aAsMp3.res.status === 415, m4aAsMp3.res.status);
+	await emptyBucket();
 }
 
 /** Deletes every file in the bucket, so a check starts from an empty one. */
@@ -649,6 +691,7 @@ async function browserChecks() {
 	const files = {
 		wav: path.join(tmp, 'song.wav'),
 		renamed: path.join(tmp, 'renamed.mp3'),
+		fakeMp3: path.join(tmp, 'Initial D.mp3'),
 		huge: path.join(tmp, 'huge.mp3'),
 		song: path.join(tmp, 'my song.mp3'),
 		mid: path.join(tmp, 'mid.mp3'),
@@ -665,6 +708,7 @@ async function browserChecks() {
 	riff.write('RIFF');
 	fs.writeFileSync(files.wav, riff);
 	fs.writeFileSync(files.renamed, riff);
+	fs.writeFileSync(files.fakeMp3, m4aSong);
 	fs.writeFileSync(files.song, mp3(1000000));
 	fs.writeFileSync(files.mid, mp3(60 * MB));
 	const fd = fs.openSync(files.huge, 'w');
@@ -808,8 +852,8 @@ async function browserChecks() {
 			);
 			return text('err');
 		};
-		check('a .wav is refused before uploading', /not an mp3/.test(await pick(files.wav)), await text('err'));
-		check('a wav renamed to .mp3 is refused by its bytes', /not a real mp3/.test(await pick(files.renamed)), await text('err'));
+		check('a .wav is refused before uploading', /not an mp3 or m4a/.test(await pick(files.wav)), await text('err'));
+		check('a wav renamed to .mp3 is refused by its bytes', /not a real mp3 or m4a/.test(await pick(files.renamed)), await text('err'));
 		check('a file over 500 MB is refused', /at most 500 MB/.test(await pick(files.huge)), await text('err'));
 		// (Not signed in yet, so not known as the owner: the usual limits apply.)
 		await tab('Images');
@@ -1456,6 +1500,27 @@ async function browserChecks() {
 		});
 		check('SlimeBeep loading late still gets the panel, and the note goes away', late.got === 'slimecheat' && !late.note, late);
 		await lone.close();
+		// An m4a named .mp3 (what downloaders often make): uploaded as the m4a it is, and it plays.
+		await tab('Songs');
+		check('an m4a named .mp3 uploads', !(await pick(files.fakeMp3)), await text('err'));
+		const m4aLink = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
+		const m4aPlay = await page
+			.evaluate(async (url) => {
+				const a = new Audio(url);
+				await a.play();
+				await new Promise((resolve, reject) => {
+					a.ontimeupdate = () => a.currentTime > 0.3 && resolve(null);
+					a.onerror = () => reject(new Error(`audio error ${a.error && a.error.code}`));
+					setTimeout(() => reject(new Error('no playback')), 10000);
+				});
+				a.pause();
+				return { t: a.currentTime, d: a.duration };
+			}, m4aLink)
+			.catch((e) => ({ err: String(e) }));
+		check('...its link ends in .m4a and plays on the game page', m4aLink.endsWith('.m4a') && m4aPlay.t > 0.3 && m4aPlay.d > 20, {
+			m4aLink,
+			m4aPlay,
+		});
 		check('every upload signed in with a SlimeBeep proof', (await page.evaluate(() => /** @type {any} */ (window).proofs)) > 5);
 		check('no page errors', errors.length === 0, errors);
 	} finally {
@@ -1466,6 +1531,7 @@ async function browserChecks() {
 (async () => {
 	try {
 		pics = await makePictures();
+		makeM4a();
 		await workerChecks();
 		await proofChecks();
 		await imageChecks();

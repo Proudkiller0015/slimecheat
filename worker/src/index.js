@@ -1,5 +1,5 @@
 /**
- * SlimeCheat uploads: players upload mp3 songs in parts (R2 multipart) and room background images in one
+ * SlimeCheat uploads: players upload mp3 and m4a songs in parts (R2 multipart) and room background images in one
  * request, and anyone can load them back from this Worker. It never fetches other sites; it only writes to
  * and reads from its bucket.
  *
@@ -8,7 +8,7 @@
  * owners (OWNERS) keep files 5 days and can list and delete everyone's. Other players' files last
  * OTHER_LIFE, count toward OTHER_CAP each, and are the first to go when the bucket is full.
  *
- * POST   /upload                       { name, size } -> { key, uploadId, partSize }   (an mp3, or an image over 25 MB)
+ * POST   /upload                       { name, size } -> { key, uploadId, partSize }   (a song, or an image over 25 MB)
  * PUT    /upload/<key>/<part>?uploadId  the part's bytes -> { etag }                   (key needed)
  * POST   /upload/<key>/done?uploadId    { parts } -> { url }                            (key needed)
  * DELETE /upload/<key>?uploadId         cancels an upload                               (key needed)
@@ -40,7 +40,11 @@ const OTHER_LIFE = 12 * 60 * 60 * 1000;
 /** Most bytes one other player may have stored at once (files and unfinished uploads). */
 const OTHER_CAP = 1000 * MB;
 /** File keys: random hex and the extension of the file's real type. */
-const KEY_RE = /^[0-9a-f]{32}\.(mp3|jpg|png|webp)$/;
+const KEY_RE = /^[0-9a-f]{32}\.(mp3|m4a|jpg|png|webp)$/;
+/** Song names and keys: mp3, or m4a (AAC in an MP4 file). */
+const SONG_NAME = /\.(mp3|m4a)$/i;
+/** The served type of each song extension. */
+const SONG_TYPES = { mp3: 'audio/mpeg', m4a: 'audio/mp4' };
 /** Image names the game takes as a room background (ChatAdminRoomCustomizationImageFormats). */
 const IMAGE_NAME = /\.(jpe?g|png|webp)$/i;
 /** The served type of each image extension. */
@@ -71,6 +75,14 @@ function isMp3(b) {
 		return true;
 	}
 	return b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && ((b[1] >> 3) & 3) !== 1 && ((b[1] >> 1) & 3) === 1;
+}
+
+/**
+ * Whether bytes start like an MP4 file (an m4a): a 'ftyp' box at byte 4.
+ * @param {Uint8Array} b
+ */
+function isM4a(b) {
+	return String.fromCharCode(...b.slice(4, 8)) === 'ftyp';
 }
 
 /**
@@ -367,7 +379,7 @@ async function listFiles(request, env, cors, who) {
 			files: shown.reverse().map((o) => ({
 				url: `${url.origin}/${o.key}`,
 				name: o.customMetadata?.name || o.key,
-				kind: o.key.endsWith('.mp3') ? 'song' : 'image',
+				kind: SONG_NAME.test(o.key) ? 'song' : 'image',
 				size: o.size,
 				uploaded: o.uploaded.getTime(),
 				expires: kept.has(o.key) ? null : expiry(env, o),
@@ -432,10 +444,10 @@ async function start(request, env, cors, who) {
 	/** @type {{ name?: unknown, size?: unknown }} */
 	const body = await request.json().catch(() => ({}));
 	const size = Number(body.size);
-	const song = typeof body.name === 'string' && /\.mp3$/i.test(body.name);
+	const song = typeof body.name === 'string' && SONG_NAME.test(body.name);
 	const image = typeof body.name === 'string' && IMAGE_NAME.test(body.name);
 	if (!song && !image) {
-		return json({ error: 'Only .mp3 songs and .jpg, .jpeg, .png or .webp images can be uploaded.' }, 415, cors);
+		return json({ error: 'Only .mp3 or .m4a songs and .jpg, .jpeg, .png or .webp images can be uploaded.' }, 415, cors);
 	}
 	if (!Number.isInteger(size) || size < 1) {
 		return json({ error: 'The file is empty.' }, 400, cors);
@@ -453,13 +465,13 @@ async function start(request, env, cors, who) {
 	if (!(await makeRoom(env, size))) {
 		return json({ error: 'Other uploads in progress fill the storage. Try again once they finish.' }, 507, cors);
 	}
-	// An image's link ends in the extension its name says; its first part must really be that type.
-	const ext = song
-		? 'mp3'
-		: /** @type {'jpg' | 'png' | 'webp'} */ (String(body.name).toLowerCase().split('.').pop().replace('jpeg', 'jpg'));
+	// A file's link ends in the extension its name says; its first part must really be that type.
+	const ext = /** @type {'mp3' | 'm4a' | 'jpg' | 'png' | 'webp'} */ (
+		String(body.name).toLowerCase().split('.').pop().replace('jpeg', 'jpg')
+	);
 	const key = `${randomName()}.${ext}`;
 	const multipart = await env.SONGS.createMultipartUpload(key, {
-		httpMetadata: { contentType: song ? 'audio/mpeg' : IMAGE_TYPES[ext] },
+		httpMetadata: { contentType: song ? SONG_TYPES[ext] : IMAGE_TYPES[ext] },
 		customMetadata: { name: cleanName(body.name), ...byMeta(who) },
 	});
 	await env.SONGS.put(PENDING + key, null, { customMetadata: { size: String(size), uploadId: multipart.uploadId, ...byMeta(who) } });
@@ -483,7 +495,7 @@ async function cancel(env, key, uploadId) {
 
 /**
  * Takes one part. Every part must be exactly as long as the declared size allows, so the parts can
- * never add up to more than it; the first must start like an mp3. A wrong part cancels the upload.
+ * never add up to more than it; the first must start like the type its key says. A wrong part cancels the upload.
  * @param {Request} request
  * @param {Env} env
  * @param {Record<string, string>} cors
@@ -505,11 +517,16 @@ async function putPart(request, env, cors, key, uploadId, n) {
 	let bytes = request.body;
 	if (n === 1) {
 		bytes = await request.arrayBuffer();
-		if (key.endsWith('.mp3') && !isMp3(new Uint8Array(bytes, 0, Math.min(4, bytes.byteLength)))) {
+		const head = new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength));
+		if (key.endsWith('.mp3') && !isMp3(head)) {
 			await cancel(env, key, uploadId);
-			return json({ error: 'This file is not an mp3. Only mp3 files can be uploaded.' }, 415, cors);
+			return json({ error: 'This file is not a real mp3.' }, 415, cors);
 		}
-		if (!key.endsWith('.mp3') && imageType(new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength))) !== key.split('.').pop()) {
+		if (key.endsWith('.m4a') && !isM4a(head)) {
+			await cancel(env, key, uploadId);
+			return json({ error: 'This file is not a real m4a.' }, 415, cors);
+		}
+		if (!SONG_NAME.test(key) && imageType(new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength))) !== key.split('.').pop()) {
 			await cancel(env, key, uploadId);
 			return json({ error: 'This file is not a real JPEG, PNG or WEBP image of the type its name says.' }, 415, cors);
 		}
