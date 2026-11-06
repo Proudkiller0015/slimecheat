@@ -427,7 +427,7 @@
 			if (!file.size) {
 				return 'That file is empty.';
 			}
-			if (file.size > MAX_IMAGE) {
+			if (file.size > MAX_IMAGE && !isOwner) {
 				return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; images can be at most 100 MB.`;
 			}
 			if (!imageType(new Uint8Array(await file.slice(0, 12).arrayBuffer()))) {
@@ -446,7 +446,7 @@
 			if (!file.size) {
 				return 'That file is empty.';
 			}
-			if (file.size > MAX_SONG) {
+			if (file.size > MAX_SONG && !isOwner) {
 				return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; songs can be at most 500 MB.`;
 			}
 			if (!isMp3(new Uint8Array(await file.slice(0, 4).arrayBuffer()))) {
@@ -535,6 +535,18 @@
 		 */
 		const fileRow = (file) => {
 			const row = make('div', 'sb-row sc-file');
+			// Owners: 📌 keeps a file forever (never deleted, not even to make room); Undo puts it back on its timer.
+			const keepBtn = /** @type {HTMLButtonElement} */ (
+				make('button', 'sb-pill sc-keep', file.kept ? '📌 Kept · Undo' : '📌 Keep forever')
+			);
+			keepBtn.hidden = !isOwner;
+			keepBtn.addEventListener('click', () =>
+				guard(async () => {
+					keepBtn.disabled = true;
+					await call(file.kept ? 'DELETE' : 'POST', `/upload/keep/${file.url.split('/').pop()}`, new AbortController().signal);
+					await ($('files').hidden ? listKind() : listFiles());
+				}),
+			);
 			row.style.cursor = 'default';
 			const copyBtn = make('button', 'sb-pill sc-copylink', 'Copy link');
 			const del = /** @type {HTMLButtonElement} */ (make('button', 'sb-pill sc-del', 'Delete'));
@@ -564,11 +576,15 @@
 				}),
 			);
 			const buttons = make('div', 'sc-line');
-			buttons.append(copyBtn, del);
+			buttons.append(copyBtn, del, keepBtn);
 			const info = make('div', 'sb-main');
 			info.append(
 				make('b', 'sb-name', file.name),
-				make('div', 'sb-sub', `${size(file.size)} · ${new Date(file.uploaded).toLocaleString()} · ${timeLeft(file.expires)}`),
+				make(
+					'div',
+					'sb-sub',
+					`${size(file.size)} · ${new Date(file.uploaded).toLocaleString()} · ${file.kept ? '📌 kept forever' : timeLeft(file.expires)}`,
+				),
 				buttons,
 			);
 			if (file.kind === 'image') {
@@ -595,16 +611,20 @@
 			}
 		};
 		const ownerView = () => stored(OWNER_VIEW_KEY) !== '0';
-		const noteOwner = (/** @type {boolean} */ isOwner) => {
-			$('ownerrow').hidden = !isOwner;
+		const noteOwner = (/** @type {boolean} */ owner) => {
+			isOwner = owner;
+			$('ownerrow').hidden = !owner;
+			$('limits').textContent = owner ? KINDS[kind].hint.replace(/up to .*$/, 'no size limit for you (owner)') : KINDS[kind].hint;
 			try {
-				localStorage.setItem(OWNER_KEY, isOwner ? '1' : '0');
+				localStorage.setItem(OWNER_KEY, owner ? '1' : '0');
 			} catch (e) {
 				/* no storage */
 			}
 		};
+		/** Whether the server said you're an owner (remembered in this browser until it says otherwise). */
+		let isOwner = stored(OWNER_KEY) === '1';
 		ownerBox.checked = ownerView();
-		$('ownerrow').hidden = stored(OWNER_KEY) !== '1';
+		$('ownerrow').hidden = !isOwner;
 		ownerBox.addEventListener('change', () => guard(() => localStorage.setItem(OWNER_VIEW_KEY, ownerBox.checked ? '1' : '0')));
 
 		/**
@@ -654,7 +674,7 @@
 		const listKind = async () => {
 			const want = kind === 'images' ? 'image' : 'song';
 			const what = kind === 'images' ? 'images' : 'songs';
-			/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number }[] }} */
+			/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number, kept?: boolean }[], admin?: boolean }} */
 			let answer;
 			try {
 				answer = await call('GET', '/upload/files', new AbortController().signal);
@@ -667,6 +687,7 @@
 			if ((kind === 'images' ? 'image' : 'song') !== want) {
 				return;
 			}
+			noteOwner(!!answer.admin);
 			const mine = answer.files.filter((f) => f.kind === want);
 			$('recenthead').textContent = mine.length ? `Your ${what} (${mine.length})` : `No ${what} uploaded yet.`;
 			$('recent').replaceChildren(...mine.map(fileRow));

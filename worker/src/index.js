@@ -15,6 +15,7 @@
  * PUT    /upload/image?name             the image's bytes -> { url }                    (key needed)
  * GET    /upload/files                  -> { files (newest first), used, cap }           (key needed)
  * DELETE /upload/files/<key>            deletes a song or an image                      (key needed)
+ * POST   /upload/keep/<key>             keeps a file forever (owners); DELETE undoes it
  * GET    /<key>                         the file, with Range support, for everyone
  *
  * The bucket stays under CAP_BYTES by deleting the oldest files first, songs and images alike. Files and
@@ -107,6 +108,8 @@ function json(body, status, cors) {
 const AUDIENCE = 'slimecheat';
 /** How old a SlimeBeep proof may be. */
 const PROOF_LIFE = 5 * 60 * 1000;
+/** Marks for files an owner keeps forever: `_keep/<file key>`, empty (never listed as a file, never served). */
+const KEEP = '_keep/';
 /** Where the SlimeBeep key each owner signed in with first is kept (never listed as a file, never served). */
 const AUTH = '_auth/';
 /** base64url */
@@ -234,11 +237,15 @@ function ownerOf(env, o) {
 }
 
 /**
- * When a file stops being served: 5 days for the owners' files, OTHER_LIFE for everyone else's.
+ * When a file stops being served: never for a kept one, 5 days for the owners' files, OTHER_LIFE for everyone else's.
  * @param {Env} env
  * @param {R2Object} o
+ * @param {Set<string>} [kept] the files an owner keeps forever
  */
-function expiry(env, o) {
+function expiry(env, o, kept) {
+	if (kept && kept.has(o.key)) {
+		return Infinity;
+	}
 	return o.uploaded.getTime() + (owners(env).includes(ownerOf(env, o)) ? FILE_LIFE : OTHER_LIFE);
 }
 
@@ -246,7 +253,7 @@ function expiry(env, o) {
  * What the bucket holds: its files (songs and images), oldest first, and the bytes promised to
  * unfinished uploads (by their declared size). Uploads older than a day are aborted on the way.
  * @param {Env} env
- * @returns {Promise<{ files: R2Object[], pending: number, pendingBy: Record<number, number> }>}
+ * @returns {Promise<{ files: R2Object[], pending: number, pendingBy: Record<number, number>, kept: Set<string> }>}
  */
 async function scan(env) {
 	/** @type {R2Object[]} */
@@ -254,47 +261,59 @@ async function scan(env) {
 	let pending = 0;
 	/** @type {Record<number, number>} */
 	const pendingBy = {};
+	/** @type {R2Object[]} */
+	const all = [];
 	/** @type {string | undefined} */
 	let cursor;
 	do {
 		const page = await env.SONGS.list({ cursor, include: ['customMetadata'] });
-		for (const o of page.objects) {
-			if (o.key.startsWith(AUTH)) {
-				continue;
-			}
-			if (!o.key.startsWith(PENDING)) {
-				if (expiry(env, o) > Date.now()) {
-					files.push(o);
-				} else {
-					await env.SONGS.delete(o.key);
-				}
-			} else if (Date.now() - o.uploaded.getTime() < UPLOAD_LIFE) {
-				const size = Number(o.customMetadata?.size) || 0;
-				pending += size;
-				pendingBy[ownerOf(env, o)] = (pendingBy[ownerOf(env, o)] || 0) + size;
-			} else {
-				await cancel(env, o.key.slice(PENDING.length), o.customMetadata?.uploadId || '');
-			}
-		}
+		all.push(...page.objects);
 		cursor = page.truncated ? page.cursor : undefined;
 	} while (cursor);
+	/** @type {Set<string>} */
+	const kept = new Set(all.filter((o) => o.key.startsWith(KEEP)).map((o) => o.key.slice(KEEP.length)));
+	for (const o of all) {
+		if (o.key.startsWith(AUTH) || o.key.startsWith(KEEP)) {
+			continue;
+		}
+		if (!o.key.startsWith(PENDING)) {
+			if (expiry(env, o, kept) > Date.now()) {
+				files.push(o);
+			} else {
+				await env.SONGS.delete(o.key);
+			}
+		} else if (Date.now() - o.uploaded.getTime() < UPLOAD_LIFE) {
+			const size = Number(o.customMetadata?.size) || 0;
+			pending += size;
+			pendingBy[ownerOf(env, o)] = (pendingBy[ownerOf(env, o)] || 0) + size;
+		} else {
+			await cancel(env, o.key.slice(PENDING.length), o.customMetadata?.uploadId || '');
+		}
+	}
+	// A mark whose file is gone (deleted by hand) goes too.
+	for (const key of kept) {
+		if (!files.some((o) => o.key === key)) {
+			await env.SONGS.delete(KEEP + key);
+			kept.delete(key);
+		}
+	}
 	files.sort((x, y) => x.uploaded.getTime() - y.uploaded.getTime());
-	return { files, pending, pendingBy };
+	return { files, pending, pendingBy, kept };
 }
 
 /**
  * Makes room for `need` more bytes under the cap by deleting files: other players' first, then the owners',
- * oldest first within each, songs and images alike.
+ * oldest first within each, songs and images alike. Kept files are never deleted.
  * @param {Env} env
  * @param {number} need
  * @param {string} [keep] a file that must stay (the one just uploaded)
  * @returns {Promise<boolean>} whether it fits (it doesn't when unfinished uploads alone fill the cap)
  */
 async function makeRoom(env, need, keep) {
-	const { files, pending } = await scan(env);
+	const { files, pending, kept } = await scan(env);
 	const cap = Number(env.CAP_BYTES);
 	const mine = (/** @type {R2Object} */ o) => (owners(env).includes(ownerOf(env, o)) ? 1 : 0);
-	const others = files.filter((o) => o.key !== keep).sort((x, y) => mine(x) - mine(y));
+	const others = files.filter((o) => o.key !== keep && !kept.has(o.key)).sort((x, y) => mine(x) - mine(y));
 	let total = need + pending + files.reduce((sum, o) => sum + o.size, 0);
 	if (total - others.reduce((sum, o) => sum + o.size, 0) > cap) {
 		return false;
@@ -336,7 +355,7 @@ const QUOTA_FULL = `You can keep at most ${OTHER_CAP / MB} MB of uploads at a ti
  * @param {Who} who
  */
 async function listFiles(request, env, cors, who) {
-	const { files, pending, pendingBy } = await scan(env);
+	const { files, pending, pendingBy, kept } = await scan(env);
 	const url = new URL(request.url);
 	const all = who.admin && url.searchParams.get('all') === '1';
 	const shown = all ? files : files.filter((o) => ownerOf(env, o) === who.n);
@@ -351,7 +370,8 @@ async function listFiles(request, env, cors, who) {
 				kind: o.key.endsWith('.mp3') ? 'song' : 'image',
 				size: o.size,
 				uploaded: o.uploaded.getTime(),
-				expires: expiry(env, o),
+				expires: kept.has(o.key) ? null : expiry(env, o),
+				kept: kept.has(o.key),
 				...(all ? { by: ownerOf(env, o), byName: o.customMetadata?.byName || '' } : {}),
 			})),
 			used,
@@ -420,10 +440,11 @@ async function start(request, env, cors, who) {
 	if (!Number.isInteger(size) || size < 1) {
 		return json({ error: 'The file is empty.' }, 400, cors);
 	}
-	if (song && size > MAX_SONG) {
+	// The owners have no size limit: only the bucket's cap (makeRoom) holds them.
+	if (song && size > MAX_SONG && !who.admin) {
 		return json({ error: 'Songs can be at most 500 MB.' }, 413, cors);
 	}
-	if (image && size > MAX_IMAGE) {
+	if (image && size > MAX_IMAGE && !who.admin) {
 		return json({ error: `Images can be at most ${MAX_IMAGE / MB} MB.` }, 413, cors);
 	}
 	if (!(await hasQuota(env, who, size))) {
@@ -580,7 +601,7 @@ async function serve(request, env, key) {
 	} catch (e) {
 		return new Response('Range Not Satisfiable', { status: 416, headers: FILE_CORS });
 	}
-	if (!file || expiry(env, file) <= Date.now()) {
+	if (!file || (expiry(env, file) <= Date.now() && !(await env.SONGS.head(KEEP + key)))) {
 		return new Response('Not found', { status: 404, headers: FILE_CORS });
 	}
 	const headers = new Headers(FILE_CORS);
@@ -622,12 +643,28 @@ async function upload(request, env, cors, path, query, who) {
 	if (key === 'files' && path.length === 2 && request.method === 'GET') {
 		return listFiles(request, env, cors, who);
 	}
+	// Keep forever (owners only): POST marks a file, DELETE undoes it.
+	if (key === 'keep' && path.length === 3 && KEY_RE.test(part) && (request.method === 'POST' || request.method === 'DELETE')) {
+		if (!who.admin) {
+			return json({ error: 'Only the owner can keep files forever.' }, 403, cors);
+		}
+		if (request.method === 'DELETE') {
+			await env.SONGS.delete(KEEP + part);
+			return json({ ok: true, kept: false }, 200, cors);
+		}
+		if (!(await env.SONGS.head(part))) {
+			return json({ error: 'That file is gone.' }, 404, cors);
+		}
+		await env.SONGS.put(KEEP + part, '');
+		return json({ ok: true, kept: true }, 200, cors);
+	}
 	if (key === 'files' && path.length === 3 && KEY_RE.test(part) && request.method === 'DELETE') {
 		const file = await env.SONGS.head(part);
 		if (file && !who.admin && ownerOf(env, file) !== who.n) {
 			return json({ error: 'That file is not yours.' }, 403, cors);
 		}
 		await env.SONGS.delete(part);
+		await env.SONGS.delete(KEEP + part);
 		return json({ ok: true }, 200, cors);
 	}
 	if (!KEY_RE.test(key) || !uploadId) {

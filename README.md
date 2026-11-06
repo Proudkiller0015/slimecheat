@@ -19,7 +19,8 @@ Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed
 - **🎵 Songs / 🖼 Images**: upload an mp3 (up to 500 MB) or a room background (.jpg, .png, .webp, up to 100 MB)
   and get a direct link to paste into your room's music or Image URL. Everyone in the room hears and sees
   it, add-on or not.
-- **📁 My files**: your uploads, newest first, with Copy link and Delete. Your files last 12 hours.
+- **📁 My files**: your uploads, newest first, with Copy link and Delete. Your files last 12 hours. (The owner can
+  📌 keep a file forever, with an undo.)
 - **🎲 Dice**: rolls into the room exactly like `/dice`, with the result you type (or a fair roll).
 - **🔓 Cheats**, on yourself only:
   - 🔥 **Lock burner**: pick a body part and burn its lock off, take the item off, or burn every lock.

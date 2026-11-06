@@ -1,11 +1,15 @@
 {
 	"rules": [
 		{
-			"id": "songs-last-5-days",
+			"id": "abort-unfinished-uploads",
 			"enabled": true,
 			"conditions": {},
-			"deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 432000 } },
-			"abortMultipartUploadsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+			"abortMultipartUploadsTransition": {
+				"condition": {
+					"type": "Age",
+					"maxAge": 86400
+				}
+			}
 		}
 	]
 }

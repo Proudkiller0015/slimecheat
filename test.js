@@ -160,6 +160,27 @@ async function proofChecks() {
 			headers: { Authorization: `SlimeBeep ${Buffer.from(JSON.stringify(proof)).toString('base64')}` },
 		});
 	};
+	/**
+	 * Starts an upload as another player (member 31337, a fresh key).
+	 * @param {{ priv: CryptoKey, pub: { x: string, y: string } }} k
+	 * @param {string} name
+	 * @param {number} size
+	 */
+	const startAs = async (k, name, size) => {
+		const time = Date.now();
+		const proof = { memberNumber: 31337, time, pub: k.pub, sig: await sign(k.priv, `slimebeep-proof|slimecheat|31337|${time}`), rk: null };
+		return call('POST', '/upload', {
+			body: { name, size },
+			headers: { Authorization: `SlimeBeep ${Buffer.from(JSON.stringify(proof)).toString('base64')}` },
+		});
+	};
+	const k31337 = await newKey();
+	const songLimit = (await startAs(k31337, 'big.mp3', 500 * 1024 * 1024 + 1)).status;
+	const imageLimit = (await startAs(k31337, 'big.png', 100 * 1024 * 1024 + 1)).status;
+	check('other players keep the limits: a song over 500 MB and an image over 100 MB are 413', songLimit === 413 && imageLimit === 413, [
+		songLimit,
+		imageLimit,
+	]);
 	const first = await newKey();
 	const ok = await files(first);
 	const list = await ok.json();
@@ -236,7 +257,15 @@ async function workerChecks() {
 	const wav = await call('POST', '/upload', { key: KEY, body: { name: 'song.wav', size: 100 } });
 	check('a .wav name: 415 with a message', wav.status === 415 && /mp3/.test((await wav.json()).error), wav.status);
 	const big = await call('POST', '/upload', { key: KEY, body: { name: 'song.mp3', size: 500 * MB + 1 } });
-	check('over 500 MB declared: 413', big.status === 413, big.status);
+	const bigStarted = big.ok ? await big.json() : null;
+	check(
+		'the owner has no 500 MB limit: a 500 MB + 1 song is only held back by the storage cap (507 here, 400 MB test bucket), not 413',
+		big.status === 507,
+		big.status,
+	);
+	if (bigStarted) {
+		await call('DELETE', `/upload/${bigStarted.key}?uploadId=${encodeURIComponent(bigStarted.uploadId)}`, { key: KEY });
+	}
 	const empty = await call('POST', '/upload', { key: KEY, body: { name: 'song.mp3', size: 0 } });
 	check('empty file: 400', empty.status === 400, empty.status);
 
@@ -422,14 +451,35 @@ async function workerChecks() {
 
 	const life = JSON.parse(fs.readFileSync(path.join(__dirname, 'worker/lifecycle.json'), 'utf8')).rules;
 	check(
-		'lifecycle.json: one rule for the whole bucket, songs deleted after 5 days, unfinished uploads aborted after 1',
+		'lifecycle.json: one rule for the whole bucket that only aborts unfinished uploads after 1 day (the Worker deletes files by age, so kept files stay)',
 		life.length === 1 &&
 			life[0].enabled &&
 			Object.keys(life[0].conditions).length === 0 &&
-			life[0].deleteObjectsTransition.condition.type === 'Age' &&
-			life[0].deleteObjectsTransition.condition.maxAge === 5 * 86400 &&
+			!life[0].deleteObjectsTransition &&
 			life[0].abortMultipartUploadsTransition.condition.maxAge === 86400,
 	);
+
+	// 📌 Keep forever: owners only; a kept file says so, is never deleted to make room, and Undo puts it back.
+	const keptSong = await upload('keep me.mp3', mp3(1000000));
+	const keptKey = keptSong.url.split('/').pop();
+	const listKept = async () => (await (await call('GET', '/upload/files', { key: KEY })).json()).files.find((f) => f.url.endsWith(keptKey));
+	const keepRes = await call('POST', `/upload/keep/${keptKey}`, { key: KEY });
+	const k1 = await listKept();
+	check(
+		'the owner can keep a file forever: it lists as kept, with no expiry',
+		keepRes.status === 200 && k1.kept === true && k1.expires === null,
+		k1,
+	);
+	const markHidden = !JSON.stringify((await (await call('GET', '/upload/files', { key: KEY })).json()).files).includes('_keep');
+	check("the keep mark isn't listed as a file", markHidden);
+	// Fill the bucket: the kept song must survive while older, unkept files make room.
+	await upload('filler1.mp3', mp3(200 * MB));
+	await upload('filler2.mp3', mp3(250 * MB));
+	check('a kept file is never deleted to make room', !!(await listKept()) && (await fetch(keptSong.url)).status === 200);
+	const undo = await call('DELETE', `/upload/keep/${keptKey}`, { key: KEY });
+	const k2 = await listKept();
+	check('Undo puts it back on its timer', undo.status === 200 && k2 && k2.kept === false && typeof k2.expires === 'number', k2);
+	await emptyBucket();
 }
 
 /** Deletes every file in the bucket, so a check starts from an empty one. */
@@ -524,7 +574,11 @@ async function imageChecks() {
 		bigServed && bigServed.headers.get('content-type'),
 	);
 	const tooBigParts = await call('POST', '/upload', { key: KEY, body: { name: 'huge.png', size: 100 * MB + 1 } });
-	check('an image over 100 MB: 413', tooBigParts.status === 413, tooBigParts.status);
+	const tbp = tooBigParts.ok ? await tooBigParts.json() : null;
+	check('the owner has no 100 MB image limit either', tooBigParts.status === 200, tooBigParts.status);
+	if (tbp) {
+		await call('DELETE', `/upload/${tbp.key}?uploadId=${encodeURIComponent(tbp.uploadId)}`, { key: KEY });
+	}
 	const fakeBig = await upload('fake.png', mp3(30 * MB));
 	check('a big "png" that is really an mp3: 415 at its first part', fakeBig.res.status === 415, fakeBig.res.status);
 	if (bigImg.url) {
@@ -757,6 +811,10 @@ async function browserChecks() {
 		check('a .wav is refused before uploading', /not an mp3/.test(await pick(files.wav)), await text('err'));
 		check('a wav renamed to .mp3 is refused by its bytes', /not a real mp3/.test(await pick(files.renamed)), await text('err'));
 		check('a file over 500 MB is refused', /at most 500 MB/.test(await pick(files.huge)), await text('err'));
+		// (Not signed in yet, so not known as the owner: the usual limits apply.)
+		await tab('Images');
+		check('an image over 100 MB is refused', /at most 100 MB/.test(await pick(files.hugePng)), await text('err'));
+		await tab('Songs');
 		check(
 			'before logging in, an upload says to log in with SlimeBeep',
 			/Log in to Bondage Club with SlimeBeep first/.test(await pick(files.song)),
@@ -839,7 +897,11 @@ async function browserChecks() {
 			/not a real JPEG, PNG or WEBP/.test(await pick(files.fakePng)),
 			await text('err'),
 		);
-		check('an image over 100 MB is refused', /at most 100 MB/.test(await pick(files.hugePng)), await text('err'));
+		check(
+			'...and as the owner, Images says there is no size limit',
+			/no size limit for you \(owner\)/.test(await text('limits')),
+			await text('limits'),
+		);
 		check('room background.png uploads', !(await pick(files.png)), await text('err'));
 		const imgLink = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
 		check('the image link shows and ends in .png', new RegExp(`^${BASE}/[0-9a-f]{32}\\.png$`).test(imgLink), imgLink);
