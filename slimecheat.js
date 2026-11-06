@@ -197,6 +197,10 @@
 					<div class="sb-name">🔥 Lock burner</div>
 					<label class="sc-check"><input type="checkbox" id="sc-protect"> 🛡 Leave Owner, Lover, Family, Mistress and Exclusive locks alone (and the items they lock)</label>
 				</div>
+				<div class="sb-row" style="display:block;cursor:default" id="sc-ownerrow" hidden>
+					<div class="sb-name">👑 Owner view</div>
+					<label class="sc-check"><input type="checkbox" id="sc-ownerview"> Show everyone's files in 📁 My files (off: only mine)</label>
+				</div>
 			</div>
 			<div class="sc-err" id="sc-err" hidden></div>
 			<div class="sb-hint" style="text-align:right;margin-top:6px">SlimeCheat ${VERSION}</div>
@@ -578,6 +582,31 @@
 			return row;
 		};
 
+		// ---- Owner view (owners only): My files shows everyone's files unless ⚙ Settings › 👑 turns it off. The
+		// switch appears once the server has said you're an owner (remembered in this browser).
+		const OWNER_VIEW_KEY = 'slimecheat.ownerView';
+		const OWNER_KEY = 'slimecheat.owner';
+		const ownerBox = /** @type {HTMLInputElement} */ ($('ownerview'));
+		const stored = (/** @type {string} */ k) => {
+			try {
+				return localStorage.getItem(k);
+			} catch (e) {
+				return null;
+			}
+		};
+		const ownerView = () => stored(OWNER_VIEW_KEY) !== '0';
+		const noteOwner = (/** @type {boolean} */ isOwner) => {
+			$('ownerrow').hidden = !isOwner;
+			try {
+				localStorage.setItem(OWNER_KEY, isOwner ? '1' : '0');
+			} catch (e) {
+				/* no storage */
+			}
+		};
+		ownerBox.checked = ownerView();
+		$('ownerrow').hidden = stored(OWNER_KEY) !== '1';
+		ownerBox.addEventListener('change', () => guard(() => localStorage.setItem(OWNER_VIEW_KEY, ownerBox.checked ? '1' : '0')));
+
 		/**
 		 * Fills My files: your own; for the owners, everyone's, grouped by player with yours first (the server only
 		 * answers ?all=1 for the owners, so everyone else just gets their own).
@@ -587,14 +616,16 @@
 			$('used').textContent = 'Loading…';
 			try {
 				/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number, by?: number, byName?: string }[], used: number, cap: number, admin?: boolean, me?: number }} */
-				const answer = await call('GET', '/upload/files?all=1', new AbortController().signal);
-				$('used').textContent = `Used ${size(answer.used)} of ${size(answer.cap)}`;
+				const answer = await call('GET', ownerView() ? '/upload/files?all=1' : '/upload/files', new AbortController().signal);
+				noteOwner(!!answer.admin);
+				const owner = answer.admin && ownerView();
+				$('used').textContent = `${owner ? '👑 Owner view: everyone’s files · ' : ''}Used ${size(answer.used)} of ${size(answer.cap)}`;
 				/** @type {Map<number, typeof answer.files>} */
 				const by = new Map();
 				for (const f of answer.files) {
 					by.set(f.by || 0, [...(by.get(f.by || 0) || []), f]);
 				}
-				if (!answer.admin || [...by.keys()].every((n) => n === answer.me)) {
+				if (!owner) {
 					list.replaceChildren(...answer.files.map(fileRow));
 				} else {
 					const groups = [...by].sort(([a], [b]) => Number(b === answer.me) - Number(a === answer.me));

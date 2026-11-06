@@ -906,7 +906,13 @@ async function browserChecks() {
 			shown[0].thumb === imgLink && !shown[1].thumb && !shown[2].thumb,
 			shown,
 		);
-		check('My files shows the storage used', /^Used [\d.]+ MB of 400\.0 MB$/.test(await text('used')), await text('used'));
+		check(
+			'My files shows the owner view and the storage used, with a heading even when only my files are there',
+			/^👑 Owner view: everyone’s files · Used [\d.]+ MB of 400\.0 MB$/.test(await text('used')) &&
+				(await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-list .sc-user')].map((x) => x.textContent).join('|'))) ===
+					'You #4242 · 3 files',
+			await text('used'),
+		);
 		await inPanel((h) => h.shadowRoot.querySelectorAll('#sc-list .sc-file .sc-copylink')[1].click());
 		check("a song row's Copy link copies its link", (await page.evaluate(() => navigator.clipboard.readText())) === link);
 		await inPanel((h) => h.shadowRoot.querySelector('#sc-list .sc-file .sc-copylink').click());
@@ -936,7 +942,7 @@ async function browserChecks() {
 		);
 		check('a song deletes the same way', (await rows())[0].name === 'mid.mp3' && (await fetch(link)).status === 404);
 		await (await el('refresh')).click();
-		await page.waitForFunction(() => /^Used/.test(document.getElementById('su-host').shadowRoot.getElementById('sc-used').textContent));
+		await page.waitForFunction(() => /Used /.test(document.getElementById('su-host').shadowRoot.getElementById('sc-used').textContent));
 		check('refresh reloads the list', (await rows()).length === shown.length - 2);
 		// Another player (member 777) uploads an image; the owner's My files then groups by player, theirs first.
 		const k777 = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
@@ -964,6 +970,27 @@ async function browserChecks() {
 				heads[1] === 'Lilly #777 · 1 file' &&
 				!(await inPanel((h) => !!h.shadowRoot.getElementById('sc-all'))),
 			heads,
+		);
+		await tab('⚙');
+		const ownerRow = await visible('ownerrow');
+		await (await el('ownerview')).click();
+		await tab('My files');
+		await page.waitForFunction(
+			() =>
+				!/Owner view/.test(document.getElementById('su-host').shadowRoot.getElementById('sc-used').textContent) &&
+				/^Used/.test(document.getElementById('su-host').shadowRoot.getElementById('sc-used').textContent),
+		);
+		const mineOnly = await inPanel((h) => ({
+			heads: h.shadowRoot.querySelectorAll('#sc-list .sc-user').length,
+			names: [...h.shadowRoot.querySelectorAll('#sc-list .sc-file b')].map((b) => b.textContent).join('|'),
+		}));
+		check(
+			'⚙ Settings › 👑 (shown to owners) turns the owner view off: My files shows only mine',
+			ownerRow &&
+				mineOnly.heads === 0 &&
+				!/lilly\.png/.test(mineOnly.names) &&
+				(await page.evaluate(() => localStorage.getItem('slimecheat.ownerView'))) === '0',
+			[ownerRow, mineOnly],
 		);
 
 		// Cheats, on a stand-in game: the lock burner by body part, and unlock every item.
