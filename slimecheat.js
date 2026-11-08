@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.4.0';
+	const VERSION = '2.5.0';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
@@ -29,11 +29,21 @@
 	const MAX_IMAGE = 100 * 1024 * 1024;
 	/** Images up to this go in one request; bigger ones in parts, like songs. */
 	const ONE_SHOT = 25 * 1024 * 1024;
+	/** The mp3 encoder, loaded the first time an m4a is converted (lamejs, LGPL-3.0, kept in the SlimeCheat repo). */
+	const LAME_URL = 'https://raw.githubusercontent.com/Proudkiller0015/slimecheat/main/lame.min.js';
+	/** Largest m4a converted to mp3: the browser holds the whole song uncompressed while converting. */
+	const MAX_CONVERT = 60 * 1024 * 1024;
+	/** Bitrate of converted songs, in kbps. */
+	const MP3_KBPS = 192;
 	/** Tries per part before the upload gives up. */
 	const TRIES = 3;
 	/** What each upload page takes. */
 	const KINDS = {
-		songs: { pick: '🎵 Upload song', hint: 'mp3 or m4a, up to 500 MB', accept: '.mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a' },
+		songs: {
+			pick: '🎵 Upload song',
+			hint: 'mp3 or m4a (turned into mp3), up to 500 MB',
+			accept: '.mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a',
+		},
 		images: {
 			pick: '🖼 Upload image',
 			hint: 'jpg, png or webp, up to 100 MB',
@@ -151,7 +161,7 @@
 				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
 			</div>
 			<div class="sc-page" id="sc-upload">
-				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 or m4a, up to 500 MB</span></div>
+				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 or m4a (turned into mp3), up to 500 MB</span></div>
 				<input type="file" id="sc-file" accept=".mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a" hidden>
 				<div id="sc-prog" hidden><div class="sc-bar"><div></div></div><div class="sc-line"><span class="sb-hint" id="sc-pct"></span><button class="sb-pill" id="sc-stop">Cancel</button></div></div>
 				<div id="sc-done" hidden><input class="sb-search" id="sc-link" readonly aria-label="Link"><div class="sc-line"><button class="sb-go" id="sc-copy">Copy link</button><span class="sb-hint" id="sc-copied"></span></div><span class="sb-hint" id="sc-lasts"></span></div>
@@ -460,10 +470,103 @@
 			if (file.size > MAX_SONG && !isOwner) {
 				return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; songs can be at most 500 MB.`;
 			}
-			if (!songType(new Uint8Array(await file.slice(0, 12).arrayBuffer()))) {
+			const type = songType(new Uint8Array(await file.slice(0, 12).arrayBuffer()));
+			if (!type) {
 				return `"${file.name}" is not a real mp3 or m4a inside (only its name says so).`;
 			}
+			if (type === 'm4a' && file.size > MAX_CONVERT) {
+				return `"${file.name}" is an m4a of ${Math.round(file.size / 1048576)} MB; m4a songs are turned into mp3 here, up to ${MAX_CONVERT / 1048576} MB. Convert it to mp3 first.`;
+			}
 			return '';
+		};
+
+		/** @type {Promise<any> | null} */
+		let lameLoading = null;
+		/** Loads the mp3 encoder once, like SlimeCheat itself is loaded. */
+		const loadLame = () => {
+			if (w.lamejs?.Mp3Encoder) {
+				return Promise.resolve(w.lamejs);
+			}
+			lameLoading ??= fetch(LAME_URL, { cache: 'no-store' })
+				.then((res) => {
+					if (!res.ok) {
+						throw new Error(`The mp3 encoder could not be loaded (HTTP ${res.status}).`);
+					}
+					return res.text();
+				})
+				.then((code) => {
+					const script = document.createElement('script');
+					script.textContent = `${code}
+//# sourceURL=lame.min.js`;
+					document.head.appendChild(script);
+					script.remove();
+					if (!w.lamejs?.Mp3Encoder) {
+						throw new Error('The mp3 encoder did not start.');
+					}
+					return w.lamejs;
+				})
+				.catch((e) => {
+					lameLoading = null;
+					throw e;
+				});
+			return lameLoading;
+		};
+
+		/**
+		 * Turns an m4a into an mp3 (the game's room music only saves .mp3 and .mp4 links). Runs in short steps
+		 * so the game keeps drawing, and stops when the upload is cancelled.
+		 * @param {File} file
+		 * @param {AbortSignal} signal
+		 * @param {(done: number) => void} progress - Share converted, 0 to 1
+		 * @returns {Promise<File>}
+		 */
+		const toMp3 = async (file, signal, progress) => {
+			const lame = await loadLame();
+			const rate = 44100;
+			const decoder = new OfflineAudioContext(2, 1, rate);
+			/** @type {AudioBuffer} */
+			let audio;
+			try {
+				audio = await decoder.decodeAudioData(await file.arrayBuffer());
+			} catch (e) {
+				throw new Error(`"${file.name}" could not be read as a song by this browser.`);
+			}
+			const channels = Math.min(2, audio.numberOfChannels);
+			const pcm = [];
+			for (let c = 0; c < channels; c++) {
+				const data = audio.getChannelData(c);
+				const out = new Int16Array(data.length);
+				for (let i = 0; i < data.length; i++) {
+					const v = Math.max(-1, Math.min(1, data[i]));
+					out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+				}
+				pcm.push(out);
+			}
+			const encoder = new lame.Mp3Encoder(channels, rate, MP3_KBPS);
+			const chunks = [];
+			const step = 1152 * 40;
+			let pause = performance.now();
+			for (let i = 0; i < audio.length; i += step) {
+				if (signal.aborted) {
+					throw new Error('Upload cancelled.');
+				}
+				const left = pcm[0].subarray(i, i + step);
+				const mp3 = channels === 2 ? encoder.encodeBuffer(left, pcm[1].subarray(i, i + step)) : encoder.encodeBuffer(left);
+				if (mp3.length) {
+					chunks.push(mp3);
+				}
+				if (performance.now() - pause > 30) {
+					progress(i / audio.length);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					pause = performance.now();
+				}
+			}
+			const end = encoder.flush();
+			if (end.length) {
+				chunks.push(end);
+			}
+			progress(1);
+			return new File(chunks, `${file.name.replace(/\.(mp3|m4a)$/i, '')}.mp3`, { type: 'audio/mpeg' });
 		};
 
 		/**
@@ -483,6 +586,11 @@
 			running = new AbortController();
 			const { signal } = running;
 			const bar = /** @type {HTMLElement} */ ($('prog').querySelector('.sc-bar > div'));
+			const converting = (/** @type {number} */ share) => {
+				const pct = Math.floor(share * 100);
+				bar.style.width = `${pct}%`;
+				$('pct').textContent = `Turning ${file.name} into mp3: ${pct}%`;
+			};
 			const show = (/** @type {number} */ sent) => {
 				const pct = Math.floor((sent / file.size) * 100);
 				bar.style.width = `${pct}%`;
@@ -505,12 +613,13 @@
 					done(url || '');
 					return;
 				}
-				// A song goes up under the type it really is: an m4a named .mp3 (common from downloaders) becomes .m4a.
-				let name = file.name;
-				if (!image) {
-					const type = songType(new Uint8Array(await file.slice(0, 12).arrayBuffer()));
-					name = name.replace(/\.(mp3|m4a)$/i, `.${type}`);
+				// Songs go up as mp3: an m4a (even one named .mp3, common from downloaders) is turned into one first.
+				if (!image && songType(new Uint8Array(await file.slice(0, 12).arrayBuffer())) === 'm4a') {
+					converting(0);
+					file = await toMp3(file, signal, converting);
+					show(0);
 				}
+				const name = file.name;
 				started = await call('POST', '/upload', signal, { name, size: file.size });
 				const { key, uploadId, partSize } = /** @type {{ key: string, uploadId: string, partSize: number }} */ (started);
 				const parts = [];
