@@ -441,7 +441,7 @@ function partLength(size, n) {
  * @param {Record<string, string>} cors
  */
 async function start(request, env, cors, who) {
-	/** @type {{ name?: unknown, size?: unknown }} */
+	/** @type {{ name?: unknown, size?: unknown, m4a?: unknown }} */
 	const body = await request.json().catch(() => ({}));
 	const size = Number(body.size);
 	const song = typeof body.name === 'string' && SONG_NAME.test(body.name);
@@ -470,11 +470,16 @@ async function start(request, env, cors, who) {
 		String(body.name).toLowerCase().split('.').pop().replace('jpeg', 'jpg')
 	);
 	const key = `${randomName()}.${ext}`;
+	// An m4a too big to turn into mp3 in the browser goes up under a .mp3 link, the only song link the game saves
+	// besides .mp4; it is checked and served as the m4a it is.
+	const m4aAsMp3 = ext === 'mp3' && body.m4a === true;
 	const multipart = await env.SONGS.createMultipartUpload(key, {
-		httpMetadata: { contentType: song ? SONG_TYPES[ext] : IMAGE_TYPES[ext] },
+		httpMetadata: { contentType: song ? SONG_TYPES[m4aAsMp3 ? 'm4a' : ext] : IMAGE_TYPES[ext] },
 		customMetadata: { name: cleanName(body.name), ...byMeta(who) },
 	});
-	await env.SONGS.put(PENDING + key, null, { customMetadata: { size: String(size), uploadId: multipart.uploadId, ...byMeta(who) } });
+	await env.SONGS.put(PENDING + key, null, {
+		customMetadata: { size: String(size), uploadId: multipart.uploadId, ...(m4aAsMp3 ? { m4a: '1' } : {}), ...byMeta(who) },
+	});
 	return json({ key, uploadId: multipart.uploadId, partSize: PART }, 200, cors);
 }
 
@@ -518,7 +523,12 @@ async function putPart(request, env, cors, key, uploadId, n) {
 	if (n === 1) {
 		bytes = await request.arrayBuffer();
 		const head = new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength));
-		if (key.endsWith('.mp3') && !isMp3(head)) {
+		if (key.endsWith('.mp3') && pending.customMetadata?.m4a === '1') {
+			if (!isM4a(head)) {
+				await cancel(env, key, uploadId);
+				return json({ error: 'This file is not a real m4a.' }, 415, cors);
+			}
+		} else if (key.endsWith('.mp3') && !isMp3(head)) {
 			await cancel(env, key, uploadId);
 			return json({ error: 'This file is not a real mp3.' }, 415, cors);
 		}

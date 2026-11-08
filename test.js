@@ -109,9 +109,10 @@ function call(method, url, o = {}) {
  * Uploads `data` the way the userscript does; answers the last response and the song link if it worked.
  * @param {string} name
  * @param {Buffer} data
+ * @param {object} [extra] - More fields for the start of the upload
  */
-async function upload(name, data) {
-	const res = await call('POST', '/upload', { key: KEY, body: { name, size: data.length } });
+async function upload(name, data, extra = {}) {
+	const res = await call('POST', '/upload', { key: KEY, body: { name, size: data.length, ...extra } });
 	if (!res.ok) {
 		return { res, url: '' };
 	}
@@ -520,7 +521,25 @@ async function workerChecks() {
 	const fakeM4a = await upload('fake.m4a', mp3(1000));
 	check('mp3 bytes named .m4a: 415 at the first part', fakeM4a.res.status === 415, fakeM4a.res.status);
 	const m4aAsMp3 = await upload('wrong.mp3', m4aSong);
-	check('m4a bytes sent as .mp3 to the Worker: 415 (the panel renames it first)', m4aAsMp3.res.status === 415, m4aAsMp3.res.status);
+	check('m4a bytes sent as .mp3 without the m4a flag: 415', m4aAsMp3.res.status === 415, m4aAsMp3.res.status);
+	// What the panel does with every m4a: sent as .mp3 with m4a: true, it keeps a .mp3 link and is served as audio/mp4.
+	const mix = await upload('long mix.mp3', m4aSong, { m4a: true });
+	const mixGet = mix.url ? await fetch(mix.url) : null;
+	const mixBytes = mixGet ? Buffer.from(await mixGet.arrayBuffer()) : Buffer.alloc(0);
+	check(
+		'an m4a flagged m4a: true uploads under a .mp3 link, served as audio/mp4 byte for byte',
+		mix.res.ok && mix.url.endsWith('.mp3') && mixGet.headers.get('content-type') === 'audio/mp4' && mixBytes.equals(m4aSong),
+		{ status: mix.res.status, url: mix.url, type: mixGet?.headers.get('content-type') },
+	);
+	const mixFake = await upload('fake mix.mp3', mp3(1000), { m4a: true });
+	check('mp3 bytes flagged m4a: true: 415 at the first part', mixFake.res.status === 415, mixFake.res.status);
+	const plain = await upload('plain.mp3', mp3(1000));
+	const plainGet = plain.url ? await fetch(plain.url) : null;
+	check(
+		'a plain mp3 is still served as audio/mpeg',
+		plain.res.ok && plainGet?.headers.get('content-type') === 'audio/mpeg',
+		plainGet?.headers.get('content-type'),
+	);
 	await emptyBucket();
 }
 
@@ -1500,7 +1519,7 @@ async function browserChecks() {
 		});
 		check('SlimeBeep loading late still gets the panel, and the note goes away', late.got === 'slimecheat' && !late.note, late);
 		await lone.close();
-		// An m4a named .mp3 (what downloaders often make): uploaded as the m4a it is, and it plays.
+		// An m4a named .mp3 (what downloaders often make): uploaded as the m4a it is under a .mp3 link (the game only saves .mp3/.mp4), and it plays.
 		await tab('Songs');
 		check('an m4a named .mp3 uploads', !(await pick(files.fakeMp3)), await text('err'));
 		const m4aLink = await inPanel((h) => h.shadowRoot.getElementById('sc-link').value);
@@ -1517,7 +1536,7 @@ async function browserChecks() {
 				return { t: a.currentTime, d: a.duration };
 			}, m4aLink)
 			.catch((e) => ({ err: String(e) }));
-		check('...its link ends in .m4a and plays on the game page', m4aLink.endsWith('.m4a') && m4aPlay.t > 0.3 && m4aPlay.d > 20, {
+		check('...its link ends in .mp3 and plays on the game page', m4aLink.endsWith('.mp3') && m4aPlay.t > 0.3 && m4aPlay.d > 20, {
 			m4aLink,
 			m4aPlay,
 		});
