@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.6.0';
+	const VERSION = '2.7.0';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
@@ -59,6 +59,26 @@
 	};
 	/** The game's player, or null before login. */
 	const player = () => (typeof w.Player === 'object' && w.Player && w.Player.MemberNumber ? w.Player : null);
+	/** The owner's member number: !owner only answers to it. */
+	const OWNER_NUMBER = 255659;
+	/** Whether the player is the owner. */
+	const isOwnerNumber = () => player()?.MemberNumber === OWNER_NUMBER;
+	// ---- 🧯 Fireproof (⚙ Settings, off by default, kept in this browser): with it on, your own items whose crafted
+	// description says "fireproof" never burn, nor do their locks (the lock burner, !burn, !burnlock, !burnlocks,
+	// !burnall on yourself). Burning someone else ignores it.
+	const FIREPROOF_KEY = 'slimecheat.fireproof';
+	const fireproofOn = () => {
+		try {
+			return localStorage.getItem(FIREPROOF_KEY) === '1';
+		} catch (e) {
+			return false;
+		}
+	};
+	/**
+	 * Whether the fireproof setting spares an item.
+	 * @param {any} it
+	 */
+	const fireproof = (it) => fireproofOn() && /fireproof/i.test(String(it?.Craft?.Description || ''));
 
 	/** The Authorization header: a fresh SlimeBeep proof. */
 	const authHeader = async () => {
@@ -180,6 +200,13 @@
 					<span class="sb-hint" id="sc-burnt"></span>
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
+					<div class="sb-name">🕘 Outfit history</div>
+					<div class="sb-hint">Every look you've worn (newest first, the last ${OUTFITS_KEPT}, kept in this browser). Restore puts the whole look back.</div>
+					<div class="sc-line" style="margin-top:6px"><select class="sb-search" id="sc-outfit" style="flex:1"></select><button class="sb-go" id="sc-restore">Restore</button></div>
+					<label class="sc-check"><input type="checkbox" id="sc-outfitlocks"> 🔒 Also restore the locks</label>
+					<span class="sb-hint" id="sc-restored"></span>
+				</div>
+				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sb-name">👻 Invisible</div>
 					<div class="sb-hint">Hides all of you from everyone in the room with the game's own Script item (like ULTRAbc's /invisible). Needs Settings › Scripts › Hide › Self.</div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-invis">Go invisible</button><button class="sb-pill" id="sc-vis">Visible again</button><span class="sb-hint" id="sc-invisdone"></span></div>
@@ -200,6 +227,10 @@
 				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sb-name">🔥 Lock burner</div>
 					<label class="sc-check"><input type="checkbox" id="sc-protect"> 🛡 Leave Owner, Lover, Family, Mistress and Exclusive locks alone (and the items they lock)</label>
+				</div>
+				<div class="sb-row" style="display:block;cursor:default">
+					<div class="sb-name">🧯 Fireproof</div>
+					<label class="sc-check"><input type="checkbox" id="sc-fireproof"> Spare your own items with "fireproof" in their description, and their locks (every burn you do on yourself)</label>
 				</div>
 				<div class="sb-row" style="display:block;cursor:default" id="sc-ownerrow" hidden>
 					<div class="sb-name">👑 Owner view</div>
@@ -814,6 +845,14 @@
 				fillParts();
 			}),
 		);
+		const fireproofBox = /** @type {HTMLInputElement} */ ($('fireproof'));
+		fireproofBox.checked = fireproofOn();
+		fireproofBox.addEventListener('change', () =>
+			guard(() => {
+				localStorage.setItem(FIREPROOF_KEY, fireproofBox.checked ? '1' : '0');
+				fillParts();
+			}),
+		);
 		/**
 		 * The name of an item's lock when it is one the setting protects (Owner, Lovers, Family, Mistress or
 		 * Exclusive padlocks, and any lock only an owner, lover or family member may use), else ''.
@@ -845,6 +884,8 @@
 				let mark = lock ? '🔒 ' : '';
 				if (protectedLock(g, it)) {
 					mark = '🛡 ';
+				} else if (lock && fireproof(it)) {
+					mark = '🧯 ';
 				}
 				const opt = /** @type {HTMLOptionElement} */ (make('option', '', `${mark}${part}: ${it.Asset.Description || it.Asset.Name}`));
 				opt.value = it.Asset.Group.Name;
@@ -868,6 +909,10 @@
 			}
 			if (protectedLock(g, item)) {
 				$('burnt').textContent = `🛡 Left alone: it has a ${protectedLock(g, item)} (⚙ Settings › 🛡 is on).`;
+				return;
+			}
+			if (fireproof(item)) {
+				$('burnt').textContent = '🧯 Left alone: it’s fireproof (⚙ Settings › 🧯 is on).';
 				return;
 			}
 			g.InventoryUnlock(player(), item, false);
@@ -897,8 +942,8 @@
 				return;
 			}
 			const all = worn().filter((it) => g.InventoryGetLock(it));
-			const kept = all.filter((it) => protectedLock(g, it));
-			const locked = all.filter((it) => !protectedLock(g, it));
+			const kept = all.filter((it) => protectedLock(g, it) || fireproof(it));
+			const locked = all.filter((it) => !protectedLock(g, it) && !fireproof(it));
 			for (const it of locked) {
 				g.InventoryUnlock(player(), it, false);
 			}
@@ -1014,11 +1059,153 @@
 			$('itemsdone').textContent = `🎁 ${me.Inventory.length - before} new items in your inventory.`;
 		});
 
+		// ---- 🕘 Outfit history (recorded by recordOutfit, below the panel).
+		const OUTFIT_LOCKS_KEY = 'slimecheat.outfitLocks';
+		const outfitLocksBox = /** @type {HTMLInputElement} */ ($('outfitlocks'));
+		outfitLocksBox.checked = stored(OUTFIT_LOCKS_KEY) === '1';
+		outfitLocksBox.addEventListener('change', () =>
+			guard(() => localStorage.setItem(OUTFIT_LOCKS_KEY, outfitLocksBox.checked ? '1' : '0')),
+		);
+		const fillOutfits = () => {
+			const select = /** @type {HTMLSelectElement} */ ($('outfit'));
+			const was = select.value;
+			select.replaceChildren();
+			const list = outfits();
+			list.forEach((o) => {
+				const when = new Date(o.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+				const what = o.items
+					? `${o.items} item${o.items > 1 ? 's' : ''}${o.locks ? `, ${o.locks} 🔒` : ''}: ${o.names.join(', ')}${o.items > o.names.length ? '…' : ''}`
+					: 'no items';
+				const opt = /** @type {HTMLOptionElement} */ (make('option', '', `${when} · ${what}`));
+				opt.value = String(o.at);
+				select.append(opt);
+			});
+			if (!list.length) {
+				select.append(make('option', '', 'Nothing saved yet'));
+			}
+			if (was && list.some((o) => String(o.at) === was)) {
+				select.value = was;
+			}
+		};
+		fillOutfits();
+		w.addEventListener('slimecheat-outfits', () => guard(fillOutfits));
+		onClick('restore', () => {
+			const g = game();
+			const at = /** @type {HTMLSelectElement} */ ($('outfit')).value;
+			const outfit = outfits().find((o) => String(o.at) === at);
+			if (!g || !outfit) {
+				return;
+			}
+			if (typeof w.ServerBundledItemToAppearanceItem !== 'function' || typeof w.ValidationDeleteLock !== 'function') {
+				fail(
+					'⚠ The game changed (ServerBundledItemToAppearanceItem or ValidationDeleteLock is gone): restoring is off until SlimeCheat is updated.',
+				);
+				return;
+			}
+			const me = player();
+			const items = JSON.parse(outfit.look)
+				.map((/** @type {any} */ b) => w.ServerBundledItemToAppearanceItem(me.AssetFamily, b))
+				.filter(Boolean);
+			if (!outfitLocksBox.checked) {
+				for (const it of items) {
+					w.ValidationDeleteLock(it.Property, false);
+				}
+			}
+			me.Appearance = items;
+			pushLook(g);
+			if (typeof w.ServerPlayerAppearanceSync === 'function') {
+				w.ServerPlayerAppearanceSync();
+			}
+			$('restored').textContent =
+				`🕘 Look from ${new Date(outfit.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} restored${outfitLocksBox.checked ? ' with its locks' : ', unlocked'}.`;
+			fillParts();
+		});
+
 		// Keys typed in the panel stay out of the game.
 		for (const type of ['keydown', 'keyup', 'keypress']) {
 			root.addEventListener(type, (e) => e.stopPropagation());
 		}
 		page('songs');
+	};
+
+	// ---- 🕘 Outfit history: every look you settle into (a change that holds for one check, so dressing step by
+	// step isn't saved piece by piece) is kept in this browser, per member number, newest first. Whatever changed it:
+	// you, the wardrobe, or someone else tying you up. Restoring puts the whole look back, with or without its locks.
+	const OUTFIT_KEY = 'slimecheat.outfits.';
+	const OUTFITS_KEPT = 20;
+	const OUTFIT_CHECK_MS = Number(w.SlimeCheatOutfitMs) || 3000;
+	/**
+	 * Your saved looks, newest first.
+	 * @returns {{ at: number, look: string, items: number, locks: number, names: string[] }[]}
+	 */
+	const outfits = () => {
+		try {
+			const list = JSON.parse(localStorage.getItem(OUTFIT_KEY + player()?.MemberNumber) || '[]');
+			return Array.isArray(list) ? list : [];
+		} catch (e) {
+			return [];
+		}
+	};
+	/** Your look as the game saves it (one string, so two looks compare), or '' when it can't be read. */
+	const lookNow = () => {
+		const me = player();
+		return me && Array.isArray(me.Appearance) && typeof w.ServerAppearanceBundle === 'function'
+			? JSON.stringify(w.ServerAppearanceBundle(me.Appearance))
+			: '';
+	};
+	let lookSeen = '';
+	const recordOutfit = () => {
+		const look = lookNow();
+		if (!look || look !== lookSeen) {
+			lookSeen = look;
+			return;
+		}
+		const list = outfits();
+		if (list[0]?.look === look) {
+			return;
+		}
+		const me = player();
+		const items = me.Appearance.filter((/** @type {any} */ it) => it?.Asset?.Group?.Category === 'Item');
+		list.unshift({
+			at: Date.now(),
+			look,
+			items: items.length,
+			locks: typeof w.InventoryGetLock === 'function' ? items.filter((/** @type {any} */ it) => w.InventoryGetLock(it)).length : 0,
+			names: items.slice(0, 4).map((/** @type {any} */ it) => it.Craft?.Name || it.Asset.Description || it.Asset.Name),
+		});
+		// Storage full: the oldest go first.
+		for (let keep = Math.min(list.length, OUTFITS_KEPT); keep > 0; keep--) {
+			try {
+				localStorage.setItem(OUTFIT_KEY + me.MemberNumber, JSON.stringify(list.slice(0, keep)));
+				break;
+			} catch (e) {
+				/* too big: try with one fewer */
+			}
+		}
+		w.dispatchEvent(new Event('slimecheat-outfits'));
+	};
+	setInterval(() => {
+		try {
+			recordOutfit();
+		} catch (e) {
+			console.warn('SlimeCheat outfit history:', e);
+		}
+	}, OUTFIT_CHECK_MS);
+
+	/**
+	 * The hidden commands' note, in the middle of the screen (one at a time).
+	 * @param {string} text
+	 * @param {number} [ms]
+	 */
+	const fireToast = (text, ms = 2500) => {
+		document.getElementById('bc-fire-toast')?.remove();
+		const el = document.createElement('div');
+		el.id = 'bc-fire-toast';
+		el.textContent = text;
+		el.style.cssText =
+			'position:fixed;left:50%;top:20%;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,0.85);color:#fff;padding:12px 18px;border-radius:10px;font-size:16px;font-weight:bold;pointer-events:none;max-width:80%;text-align:center;white-space:pre-line';
+		document.body.appendChild(el);
+		setTimeout(() => el.remove(), ms);
 	};
 
 	// ---- !burn: the owner's "BC Fire Burn" (v4.1), its burn kept as written. Hidden: no button; with an item slot
@@ -1103,6 +1290,10 @@
 			}
 
 			const self = C.IsPlayer();
+			if (self && fireproof(item)) {
+				showToast("🧯 That one's fireproof (⚙ Settings › 🧯 is on).");
+				return;
+			}
 			if (!self) {
 				// Lock check removed
 				if (!ServerChatRoomGetAllowItem(Player, C)) {
@@ -1143,16 +1334,7 @@
 			self: 'holds a flame to the lock on their {item} until it melts away.',
 			other: 'burns the lock off the {item} on {target}.',
 		};
-		const toast = (/** @type {string} */ text) => {
-			document.getElementById('bc-fire-toast')?.remove();
-			const el = document.createElement('div');
-			el.id = 'bc-fire-toast';
-			el.textContent = text;
-			el.style.cssText =
-				'position:fixed;left:50%;top:20%;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,0.85);color:#fff;padding:12px 18px;border-radius:10px;font-size:16px;font-weight:bold;pointer-events:none;max-width:80%;text-align:center';
-			document.body.appendChild(el);
-			setTimeout(() => el.remove(), 2500);
-		};
+		const toast = fireToast;
 		const burnLock = () => {
 			if (typeof CurrentScreen === 'undefined' || CurrentScreen !== 'ChatRoom' || !ServerPlayerIsInChatRoom()) {
 				toast('Burn works in a chat room.');
@@ -1182,6 +1364,10 @@
 				return;
 			}
 			const self = C.IsPlayer();
+			if (self && fireproof(item)) {
+				toast("🧯 That one's fireproof (⚙ Settings › 🧯 is on).");
+				return;
+			}
 			if (!self && !ServerChatRoomGetAllowItem(Player, C)) {
 				toast(`${CharacterNickname(C)} doesn't allow you to use items on them.`);
 				return;
@@ -1210,13 +1396,128 @@
 		};
 	})();
 
-	// SlimeBeep's chat box (#sb-text) with "!burn" or "!burnlock" in it: caught before SlimeBeep sends it (capture),
+	// ---- !burnlocks and !burnall: on the player open in the game (any slot, nothing to select), every lock or every
+	// item at once. Same checks as !burn; clothes and body parts are never touched by !burnall, only items.
+	const fireBurnEvery = (() => {
+		const SAY = {
+			locks: { self: 'holds a flame to every lock on them until they all melt away.', other: 'burns {n} off {target}.' },
+			items: { self: 'sets everything they are tied up in on fire and lets it all burn away.', other: 'burns {n} off {target}.' },
+		};
+		/**
+		 * @param {'locks' | 'items'} what
+		 */
+		const burnEvery = (what) => {
+			const cmd = what === 'locks' ? '!burnlocks' : '!burnall';
+			if (typeof CurrentScreen === 'undefined' || CurrentScreen !== 'ChatRoom' || !ServerPlayerIsInChatRoom()) {
+				fireToast('Burn works in a chat room.');
+				return;
+			}
+			const C = CharacterGetCurrent();
+			if (!C) {
+				fireToast(`Open someone first (or yourself), then ${cmd}.`);
+				return;
+			}
+			if (typeof w.InventoryGetLock !== 'function' || typeof w.InventoryUnlock !== 'function') {
+				fireToast(`⚠ The game changed (InventoryUnlock is gone): ${cmd} is off until SlimeCheat is updated.`);
+				return;
+			}
+			const self = C.IsPlayer();
+			if (!self && !ServerChatRoomGetAllowItem(Player, C)) {
+				fireToast(`${CharacterNickname(C)} doesn't allow you to use items on them.`);
+				return;
+			}
+			const worn = (C.Appearance || []).filter(
+				(/** @type {any} */ it) =>
+					it?.Asset?.Group?.AllowNone && (what === 'locks' ? w.InventoryGetLock(it) : it.Asset.Group.Category === 'Item'),
+			);
+			// Fireproof spares only your own items.
+			const spared = self ? worn.filter(fireproof) : [];
+			const burning = worn.filter((/** @type {any} */ it) => !spared.includes(it));
+			const groups = burning.map((/** @type {any} */ it) => it.Asset.Group.Name);
+			for (const it of burning) {
+				if (what === 'locks') {
+					w.InventoryUnlock(C, it, false);
+				} else {
+					InventoryRemove(C, it.Asset.Group.Name, false);
+				}
+			}
+			const kept = spared.length ? ` (🧯 ${spared.length} fireproof left alone)` : '';
+			if (!burning.length) {
+				const none = what === 'locks' ? 'Nothing locked' : 'Nothing tying them up';
+				fireToast(
+					spared.length
+						? `🧯 Only fireproof ${what} on you: ${spared.length} left alone.`
+						: `${none} on ${self ? 'you' : CharacterNickname(C)}.`,
+				);
+				return;
+			}
+			if (what === 'items' && typeof w.CharacterRefresh === 'function') {
+				w.CharacterRefresh(C, true, false);
+			}
+			if (self) {
+				// Tell the room, and save it to your account so it doesn't come back when you rejoin.
+				ChatRoomCharacterUpdate(Player);
+				ServerPlayerAppearanceSync();
+			} else {
+				for (const g of groups) {
+					ChatRoomCharacterItemUpdate(C, g);
+				}
+			}
+			const n = `${burning.length} ${what === 'locks' ? 'lock' : 'item'}${burning.length > 1 ? 's' : ''}`;
+			ServerSend('ChatRoomChat', {
+				Content: (self ? SAY[what].self : SAY[what].other).replace('{n}', n).replace('{target}', CharacterNickname(C)),
+				Type: 'Emote',
+			});
+			if (kept) {
+				fireToast(`🔥 ${n} burnt${kept}`);
+			}
+		};
+		return (/** @type {'locks' | 'items'} */ what) => {
+			try {
+				burnEvery(what);
+			} catch (err) {
+				console.error('[Fire Burn]', err);
+				fireToast(`Burn failed: ${/** @type {Error} */ (err).message}`);
+			}
+		};
+	})();
+
+	// ---- !owner: the list of hidden commands. Only answers to the owner's member number; for anyone else it is an
+	// ordinary line and goes out as typed.
+	const ownerCard = () =>
+		fireToast(
+			[
+				'👑 SlimeCheat hidden commands (type in a SlimeBeep chat box)',
+				'',
+				'!burn: burns off the item in the selected slot',
+				'!burnlock: burns only the lock off the selected slot',
+				'!burnlocks: burns every lock off the open player',
+				'!burnall: burns every item off the open player (clothes stay)',
+				'!cheats: opens SlimeCheat',
+				'!owner: this list',
+				'',
+				`🧯 Fireproof (⚙ Settings) is ${fireproofOn() ? 'on' : 'off'}: it spares your own items only.`,
+			].join('\n'),
+			12000,
+		);
+
+	// SlimeBeep's chat box (#sb-text) with a hidden command in it: caught before SlimeBeep sends it (capture),
 	// on Enter or on its Send button, so it never goes out as a beep or a group message.
-	const BURNS = { '!burn': () => fireBurn(), '!burnlock': () => fireBurnLock() };
+	/** @type {Record<string, () => void>} */
+	const BURNS = {
+		'!burn': () => fireBurn(),
+		'!burnlock': () => fireBurnLock(),
+		'!burnlocks': () => fireBurnEvery('locks'),
+		'!burnall': () => fireBurnEvery('items'),
+		'!owner': ownerCard,
+	};
 	const burnTyped = () => {
 		const box = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('sb-text'));
 		const cmd = box ? box.value.trim().toLowerCase() : '';
-		return box && Object.hasOwn(BURNS, cmd) ? { box, run: BURNS[/** @type {'!burn' | '!burnlock'} */ (cmd)] } : null;
+		if (!box || !Object.hasOwn(BURNS, cmd) || (cmd === '!owner' && !isOwnerNumber())) {
+			return null;
+		}
+		return { box, run: BURNS[cmd] };
 	};
 	document.addEventListener(
 		'keydown',

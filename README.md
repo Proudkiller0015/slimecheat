@@ -25,7 +25,10 @@ Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed
 - **🔓 Cheats**, on yourself only:
   - 🔥 **Lock burner**: pick a body part and burn its lock off, take the item off, or burn every lock.
   - In **⚙ Settings** you can hold cheats back; all off by default. 🛡 makes the lock burner leave Owner, Lover,
-    Family, Mistress and Exclusive locks alone (and the items they lock).
+    Family, Mistress and Exclusive locks alone (and the items they lock). 🧯 spares your own items with
+    "fireproof" in their crafted description, and their locks, from every burn you do on yourself.
+  - 🕘 **Outfit history**: every look you settle into is saved in your browser (the last 20, newest first),
+    whoever changed it. **Restore** puts a whole look back; tick 🔒 to bring its locks back too.
   - 👻 **Invisible**: hides all of you from everyone in the room with the game's own Script item (turn on
     Settings › Scripts › Hide › Self first); **Visible again** undoes it.
   - 💰 **Money**: set your money to any amount (saved to your account).
