@@ -16,7 +16,7 @@ too) or a userscript ([direct link](https://proudkiller0015.github.io/slimecheat
 Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed script only loads
 `slimecheat.js` from this repo on every game load.
 
-- **🎵 Songs / 🖼 Images**: upload an mp3 or m4a (up to 500 MB; an m4a, even one named .mp3, is turned into a real mp3 in your browser first, up to 60 MB, because the game only saves .mp3 and .mp4 music links) or a room background (.jpg, .png, .webp, up to 100 MB)
+- **🎵 Songs / 🖼 Images**: upload an mp3 or m4a (up to 500 MB; every song gets a .mp3 link, because the game only saves .mp3 and .mp4 music links: an m4a keeps its own bytes and plays fine) or a room background (.jpg, .png, .webp, up to 100 MB)
   and get a direct link to paste into your room's music or Image URL. Everyone in the room hears and sees
   it, add-on or not.
 - **📁 My files**: your uploads, newest first, with Copy link and Delete. Your files last 12 hours. (The owner can
@@ -113,5 +113,3 @@ node test.js                           # in another terminal, from the repo root
 `test.js` (it expects Chrome and puppeteer-core at the paths at its top) runs the Worker checks over HTTP and the userscript in headless Chrome on a page at the game's
 address, including drawing an uploaded image on a canvas from the game's origin and reading its pixels
 back. The local Worker can't run lifecycle rules, so the test checks `lifecycle.json` itself.
-
-`lame.min.js` is [lamejs](https://github.com/zhuker/lamejs) 1.2.1 (LGPL-3.0, see `LICENSE-lamejs`), unchanged; SlimeCheat loads it only to turn m4a songs into mp3.
