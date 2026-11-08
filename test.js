@@ -810,6 +810,8 @@ async function browserChecks() {
 		});
 		await page.evaluate((base) => {
 			/** @type {any} */ (window).SlimeCheatServer = base;
+			// Outfit history checks every 3 s in the game; quicker here.
+			/** @type {any} */ (window).SlimeCheatOutfitMs = 100;
 		}, BASE);
 		await page.addScriptTag({ content: script });
 		await page.waitForFunction(() => !!document.getElementById('su-host').shadowRoot.getElementById('sc-root'));
@@ -1450,6 +1452,246 @@ async function browserChecks() {
 				/no lock/.test(lockBurnt.noLock || ''),
 			lockBurnt,
 		);
+		// !burnlocks / !burnall on the open player (no slot needed); 🧯 fireproof spares only your own items; !owner
+		// answers only to the owner's member number.
+		const every = await page.evaluate(async () => {
+			const w = /** @type {any} */ (window);
+			/** @type {string[]} */
+			const sent = [];
+			const item = (/** @type {string} */ name, /** @type {string} */ g, /** @type {any} */ extra = {}) => ({
+				Asset: { Name: name, Description: name, Group: { Name: g, AllowNone: true, Category: 'Item' } },
+				...extra,
+			});
+			const keep = {
+				InventoryGetLock: w.InventoryGetLock,
+				InventoryUnlock: w.InventoryUnlock,
+				InventoryRemove: w.InventoryRemove,
+				InventoryGet: w.InventoryGet,
+				CharacterRefresh: w.CharacterRefresh,
+				ChatRoomCharacterUpdate: w.ChatRoomCharacterUpdate,
+			};
+			/** @type {any} */
+			let C = {};
+			Object.assign(w, {
+				CurrentScreen: 'ChatRoom',
+				ServerPlayerIsInChatRoom: () => true,
+				CharacterGetCurrent: () => C,
+				InventoryGet: (/** @type {any} */ who, /** @type {string} */ g) =>
+					who.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === g) || null,
+				InventoryGetLock: (/** @type {any} */ i) => (i.locked ? { Asset: { Name: 'MetalPadlock' } } : null),
+				InventoryUnlock: (/** @type {any} */ _, /** @type {any} */ i) => {
+					i.locked = false;
+					sent.push(`unlock ${i.Asset.Name}`);
+				},
+				InventoryRemove: (/** @type {any} */ who, /** @type {string} */ g) => {
+					who.Appearance = who.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== g);
+					sent.push(`remove ${g}`);
+				},
+				CharacterRefresh: () => sent.push('refresh'),
+				ServerChatRoomGetAllowItem: () => true,
+				ChatRoomCharacterItemUpdate: (/** @type {any} */ _, /** @type {string} */ g) => sent.push(`item ${g}`),
+				ChatRoomCharacterUpdate: () => sent.push('update'),
+				ServerPlayerAppearanceSync: () => sent.push('sync'),
+				ServerSend: (/** @type {string} */ m, /** @type {any} */ d) => sent.push(`${m}:${d.Type}:${d.Content}`),
+				CharacterNickname: () => 'Drone',
+			});
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			let gameSaw = 0;
+			box.addEventListener('keydown', (e) => {
+				if (e.key === 'Enter') {
+					gameSaw++;
+				}
+			});
+			document.body.append(box);
+			const type = (/** @type {string} */ line) => {
+				box.value = line;
+				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			};
+			const toast = () => document.getElementById('bc-fire-toast')?.textContent || '';
+			localStorage.setItem('slimecheat.fireproof', '1');
+			/** @type {any} */
+			const r = {};
+			// Someone else: every lock burns, fireproof or not, and the room hears each slot.
+			const fp = { Craft: { Name: 'Asbestos Gag', Description: 'Fireproof, of course' } };
+			C = {
+				IsPlayer: () => false,
+				Appearance: [
+					item('Cuffs', 'ItemArms', { locked: true }),
+					item('Gag', 'ItemMouth', { locked: true, ...fp }),
+					item('Rope', 'ItemLegs'),
+				],
+			};
+			type('!burnlocks');
+			r.otherLocks = sent.splice(0).join('|');
+			r.otherLocked = C.Appearance.filter((/** @type {any} */ i) => i.locked).length;
+			// Yourself: everything you're tied up in burns but the fireproof item; clothes and body stay.
+			C = {
+				IsPlayer: () => true,
+				Appearance: [
+					item('Cuffs', 'ItemArms', { locked: true }),
+					item('Gag', 'ItemMouth', fp),
+					{ Asset: { Name: 'Shirt', Group: { Name: 'Cloth', AllowNone: true, Category: 'Appearance' } } },
+					{ Asset: { Name: 'Body', Group: { Name: 'BodyUpper', AllowNone: false, Category: 'Appearance' } } },
+				],
+			};
+			type('!burnall');
+			r.selfAll = sent.splice(0).join('|');
+			r.selfLeft = C.Appearance.map((/** @type {any} */ i) => i.Asset.Name).join(',');
+			r.selfToast = toast();
+			// !burn on your own fireproof item: left alone.
+			C.FocusGroup = { Name: 'ItemMouth' };
+			type('!burn');
+			r.burnFp = toast();
+			r.burnFpLeft = C.Appearance.length;
+			// Fireproof off: it burns like anything else.
+			localStorage.setItem('slimecheat.fireproof', '0');
+			type('!burnall');
+			r.offLeft = C.Appearance.map((/** @type {any} */ i) => i.Asset.Name).join(',');
+			sent.splice(0);
+			// !owner: the owner gets the list; anyone else's !owner is an ordinary line.
+			type('!owner');
+			r.ownerCard = toast();
+			r.ownerSaw = gameSaw;
+			w.Player.MemberNumber = 1234;
+			document.getElementById('bc-fire-toast')?.remove();
+			type('!owner');
+			r.otherSaw = gameSaw;
+			r.otherBox = box.value;
+			r.otherToast = toast();
+			w.Player.MemberNumber = 255659;
+			box.remove();
+			Object.assign(w, keep);
+			return r;
+		});
+		check(
+			'!burnlocks burns every lock off someone else (fireproof only spares your own), updates each slot, emotes',
+			every.otherLocks === 'unlock Cuffs|unlock Gag|item ItemArms|item ItemMouth|ChatRoomChat:Emote:burns 2 locks off Drone.' &&
+				every.otherLocked === 0,
+			every,
+		);
+		check(
+			'!burnall on yourself burns every item but the fireproof one (clothes and body stay), saves, emotes, says what it spared',
+			every.selfAll ===
+				'remove ItemArms|refresh|update|sync|ChatRoomChat:Emote:sets everything they are tied up in on fire and lets it all burn away.' &&
+				every.selfLeft === 'Gag,Shirt,Body' &&
+				/🧯 1 fireproof left alone/.test(every.selfToast),
+			every,
+		);
+		check(
+			'!burn leaves your own fireproof item on; with 🧯 off, !burnall burns it too',
+			/fireproof/.test(every.burnFp) && every.burnFpLeft === 3 && every.offLeft === 'Shirt,Body',
+			every,
+		);
+		check(
+			'!owner shows the hidden commands to the owner (never sent); for anyone else it is an ordinary line',
+			/hidden commands/.test(every.ownerCard) &&
+				/!burnlocks/.test(every.ownerCard) &&
+				/!burnall/.test(every.ownerCard) &&
+				every.ownerSaw === 0 &&
+				every.otherSaw === 1 &&
+				every.otherBox === '!owner' &&
+				every.otherToast === '',
+			every,
+		);
+		// 🕘 Outfit history: a look that holds is saved, newest first; Restore puts it back, unlocked unless 🔒 is on.
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			localStorage.removeItem('slimecheat.outfits.255659');
+			w.ServerAppearanceBundle = (/** @type {any[]} */ app) =>
+				app.map((i) => ({ Group: i.Asset.Group.Name, Name: i.Asset.Name, Property: i.lock ? { LockedBy: 'MetalPadlock' } : {} }));
+			w.ServerBundledItemToAppearanceItem = (/** @type {string} */ _, /** @type {any} */ b) => ({
+				Asset: { Name: b.Name, Description: b.Name, Group: { Name: b.Group, Description: b.Group, Category: 'Item' } },
+				Property: { ...b.Property },
+			});
+			w.ValidationDeleteLock = (/** @type {any} */ p) => delete p.LockedBy;
+			w.ServerPlayerAppearanceSync = () => w.calls.push('sync');
+			// Earlier checks leave their own stand-ins behind.
+			w.InventoryGetLock = (/** @type {any} */ i) => (i.lock ? { Asset: { Name: 'MetalPadlock' } } : null);
+			w.CharacterRefresh = () => w.calls.push('refresh');
+			w.ChatRoomCharacterUpdate = () => w.calls.push('room');
+			w.Player.Appearance = [
+				{
+					Asset: { Name: 'Chains', Description: 'Chains', Group: { Name: 'ItemArms', Description: 'Arms', Category: 'Item' } },
+					lock: true,
+				},
+			];
+		});
+		await page.waitForFunction(() => JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]').length === 1);
+		await page.evaluate(() => {
+			/** @type {any} */ (window).Player.Appearance = [
+				{ Asset: { Name: 'Rope', Description: 'Rope', Group: { Name: 'ItemLegs', Description: 'Legs', Category: 'Item' } } },
+			];
+		});
+		await page.waitForFunction(() => JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]').length === 2);
+		await new Promise((done) => setTimeout(done, 300));
+		const history = await inPanel((h) => [...h.shadowRoot.getElementById('sc-outfit').options].map((o) => o.textContent));
+		const pickOutfit = (/** @type {string} */ name) =>
+			inPanel((h, n) => {
+				const s = h.shadowRoot.getElementById('sc-outfit');
+				s.selectedIndex = [...s.options].findIndex((o) => o.textContent.includes(n));
+			}, name);
+		await pickOutfit('Chains');
+		await page.evaluate(() => {
+			/** @type {any} */ (window).calls = [];
+		});
+		await (await el('restore')).click();
+		const lookOf = () =>
+			page.evaluate(() =>
+				/** @type {any} */ (window).Player.Appearance.map(
+					(/** @type {any} */ i) => `${i.Asset.Name}${i.Property?.LockedBy ? '🔒' : ''}`,
+				).join(','),
+			);
+		const unlocked = { look: await lookOf(), calls: await page.evaluate(() => /** @type {any} */ (window).calls.join(',')) };
+		const said = await text('restored');
+		await (await el('outfitlocks')).click();
+		await pickOutfit('Chains');
+		await (await el('restore')).click();
+		const locked = { look: await lookOf(), kept: await page.evaluate(() => localStorage.getItem('slimecheat.outfitLocks')) };
+		await (await el('outfitlocks')).click();
+		check(
+			'🕘 Outfit history saves each look newest first; Restore puts an older one back unlocked, or with its locks when 🔒 is on (remembered)',
+			history.length === 2 &&
+				/1 item: Rope/.test(history[0]) &&
+				/1 item, 1 🔒: Chains/.test(history[1]) &&
+				unlocked.look === 'Chains' &&
+				unlocked.calls === 'refresh,room,sync' &&
+				/restored, unlocked/.test(said) &&
+				locked.look === 'Chains🔒' &&
+				locked.kept === '1',
+			{ history, unlocked, said, locked },
+		);
+		// 🧯 in ⚙ Settings: off by default, remembered, and the lock burner leaves your fireproof item's lock alone.
+		await page.evaluate(() => localStorage.removeItem('slimecheat.fireproof'));
+		await tab('⚙');
+		const fpOff = await inPanel((h) => h.shadowRoot.getElementById('sc-fireproof').checked);
+		await (await el('fireproof')).click();
+		await page.evaluate(() => {
+			/** @type {any} */ (window).Player.Appearance = [
+				{
+					Asset: { Name: 'Gag', Description: 'Gag', Group: { Name: 'ItemMouth', Description: 'Mouth', Category: 'Item' } },
+					lock: true,
+					Craft: { Description: 'FIREPROOF' },
+				},
+			];
+		});
+		await tab('Cheats');
+		await (await el('parts')).click();
+		const fpMark = await inPanel((h) => h.shadowRoot.getElementById('sc-part').options[0].textContent);
+		await (await el('unlock')).click();
+		const fp = {
+			off: fpOff,
+			saved: await page.evaluate(() => localStorage.getItem('slimecheat.fireproof')),
+			mark: fpMark,
+			said: await text('burnt'),
+			stillLocked: await page.evaluate(() => /** @type {any} */ (window).Player.Appearance[0].lock),
+		};
+		check(
+			'⚙ Settings › 🧯 is off by default; on, it is remembered and the lock burner marks and spares your fireproof item',
+			!fp.off && fp.saved === '1' && /^🧯 Mouth/.test(fp.mark) && /fireproof/.test(fp.said) && fp.stillLocked === true,
+			fp,
+		);
+		await page.evaluate(() => localStorage.removeItem('slimecheat.fireproof'));
 		// A game function that throws: the error shows in SlimeCheat and nothing breaks.
 		await page.evaluate(() => {
 			/** @type {any} */ (window).InventoryUnlock = () => {
