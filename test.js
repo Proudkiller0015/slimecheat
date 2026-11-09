@@ -1148,17 +1148,17 @@ async function browserChecks() {
 			w.CharacterRefresh = () => w.calls.push('refresh');
 			w.ChatRoomCharacterUpdate = () => w.calls.push('room');
 			w.Asset = [
-				cuffs.Asset,
-				gag.Asset,
-				{ Name: 'Rope', Group: group('ItemLegs', 'Legs') },
+				{ ...cuffs.Asset, InventoryID: 1 },
+				{ ...gag.Asset, InventoryID: 2 },
+				// A free item the game counts as usable already: it must still be added
+				{ Name: 'Rope', Group: group('ItemLegs', 'Legs'), Value: 0, InventoryID: 3 },
+				// A mod item without an inventory number
+				{ Name: 'ModScythe', Group: group('ItemHandheld', 'Hands') },
 				{ Name: 'Other', Group: { ...group('ItemArms', 'Arms'), Family: 'Other' } },
 			];
-			w.InventoryAddMany = (/** @type {any} */ C, /** @type {any[]} */ items) => {
-				for (const it of items) {
-					C.Inventory.push(it);
-				}
-				w.calls.push(`add ${items.length}`);
-			};
+			w.InventoryAvailable = () => true;
+			w.InventoryItemCreate = (/** @type {any} */ _C, /** @type {string} */ g, /** @type {string} */ n) => ({ Group: g, Name: n });
+			w.ServerPlayerInventorySync = () => w.calls.push('sync');
 		});
 		await tab('Cheats');
 		const parts = await inPanel((h) =>
@@ -1185,12 +1185,24 @@ async function browserChecks() {
 		await (await el('allitems')).click();
 		const first = await page.evaluate(() => ({ calls: /** @type {any} */ (window).calls.length, inv: window.Player.Inventory.length }));
 		await (await el('allitems')).click();
-		const items = await page.evaluate(() => ({ inv: window.Player.Inventory.map((/** @type {any} */ i) => i.Name).join(','), msg: '' }));
+		const items = await page.evaluate(() => ({
+			inv: window.Player.Inventory.map((/** @type {any} */ i) => i.Name).join(','),
+			syncs: /** @type {any} */ (window).calls.filter((/** @type {string} */ c) => c === 'sync').length,
+		}));
+		const itemsMsg = await text('itemsdone');
 		check(
-			'Unlock all items asks first, then adds every item of my body type',
-			first.inv === 0 && items.inv === 'Cuffs,Gag,Rope' && /3 new items/.test(await text('itemsdone')),
-			[first, items],
+			'Unlock all items asks first, then adds every item of my body type, free ones too, and saves once',
+			first.inv === 0 &&
+				items.inv === 'Cuffs,Gag,Rope,ModScythe' &&
+				items.syncs === 1 &&
+				/4 new items/.test(itemsMsg) &&
+				/1 mod item can/.test(itemsMsg),
+			[first, items, itemsMsg],
 		);
+		await (await el('allitems')).click();
+		await (await el('allitems')).click();
+		const again = await page.evaluate(() => window.Player.Inventory.length);
+		check('Unlocking again adds nothing twice', again === 4 && /0 new items/.test(await text('itemsdone')), again);
 		// 🛡 Protected locks: off by default; on, Owner/Mistress-style locks stay (burn, take off and burn all).
 		await page.evaluate(() => {
 			const w = /** @type {any} */ (window);

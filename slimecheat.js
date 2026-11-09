@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.7.0';
+	const VERSION = '2.7.1';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
@@ -804,7 +804,7 @@
 		// ---- Cheats (on yourself only)
 		/** The game functions the cheats need, or null (with the reason shown) when one is missing. */
 		const game = () => {
-			const names = ['InventoryGet', 'InventoryGetLock', 'InventoryUnlock', 'InventoryRemove', 'CharacterRefresh', 'InventoryAddMany'];
+			const names = ['InventoryGet', 'InventoryGetLock', 'InventoryUnlock', 'InventoryRemove', 'CharacterRefresh'];
 			const missing = names.filter((n) => typeof w[n] !== 'function');
 			if (!player() || !Array.isArray(player().Appearance)) {
 				fail('Log in first.');
@@ -1050,13 +1050,40 @@
 			sureItems = 0;
 			btn.textContent = 'Unlock all items';
 			btn.classList.remove('sc-sure');
+			if (typeof w.InventoryItemCreate !== 'function' || typeof w.ServerPlayerInventorySync !== 'function') {
+				fail('⚠ The game changed (InventoryItemCreate is gone): this cheat is off until SlimeCheat is updated.');
+				return;
+			}
+			// Every item, no exception: the game's own InventoryAddMany skips items it counts as usable already
+			// (free ones, ones tied to a room or club space, buy groups with a free item), so they are added here directly.
 			const me = player();
-			const before = me.Inventory.length;
-			const all = w.Asset.filter((/** @type {any} */ a) => a && a.Group && a.Group.Family === me.AssetFamily).map(
-				(/** @type {any} */ a) => ({ Name: a.Name, Group: a.Group.Name }),
-			);
-			g.InventoryAddMany(me, all, true);
-			$('itemsdone').textContent = `🎁 ${me.Inventory.length - before} new items in your inventory.`;
+			const owned = new Set(me.Inventory.map((/** @type {any} */ i) => `${i.Group}/${i.Name}`));
+			let added = 0;
+			let unsaved = 0;
+			for (const a of w.Asset) {
+				if (!a || !a.Group || a.Group.Family !== me.AssetFamily || owned.has(`${a.Group.Name}/${a.Name}`)) {
+					continue;
+				}
+				const item = w.InventoryItemCreate(me, a.Group.Name, a.Name);
+				if (!item) {
+					continue;
+				}
+				me.Inventory.push(item);
+				owned.add(`${a.Group.Name}/${a.Name}`);
+				added++;
+				// The account saves items by their inventory number; mod items without one last until you reload
+				if (a.InventoryID == null) {
+					unsaved++;
+				}
+			}
+			if (added) {
+				w.ServerPlayerInventorySync();
+			}
+			$('itemsdone').textContent = `🎁 ${added} new items in your inventory.${
+				unsaved
+					? ` ${unsaved} mod item${unsaved === 1 ? '' : 's'} can't be saved to your account and ${unsaved === 1 ? 'lasts' : 'last'} until you reload.`
+					: ''
+			}`;
 		});
 
 		// ---- 🕘 Outfit history (recorded by recordOutfit, below the panel).
