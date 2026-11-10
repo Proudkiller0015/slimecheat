@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.9.1';
+	const VERSION = '2.10.0';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
@@ -1600,6 +1600,7 @@
 			['!locklist', '🔒 Pick one of their past locks'],
 			['!addlock', '🔒 Add a new lock'],
 			['!keepon', '🔁 Keep the item on (again to let go)'],
+			['!burnbutton', '🔥 Floating burn button'],
 		];
 		const fillHack = () => {
 			const C = typeof w.CharacterGetCurrent === 'function' ? w.CharacterGetCurrent() : null;
@@ -2805,6 +2806,7 @@
 				'!locklist: every lock the open player had, to pick one for the selected slot',
 				'!addlock: a new lock from every lock the game knows (mods too) on the selected slot',
 				'!keepon: the selected item goes back on whenever it comes off (again to let go)',
+				'!burnbutton: a floating 🔥 button that burns like !burn; drag it to move it, × removes it',
 				'!hackpanel: all of these as buttons, on the player open in the game',
 				'Restores are silent in the room: only you get a notice.',
 				'!cheats: opens SlimeCheat',
@@ -2814,6 +2816,125 @@
 			].join('\n'),
 			12000,
 		);
+
+	// ---- 🔥 Burn button (!burnbutton): a floating button that burns like !burn (the selected slot of the player open in
+	// the game). Drag it anywhere; it stays there, reloads included, until its × removes it.
+	const BURN_BUTTON_KEY = 'slimecheat.burnButton';
+	/** Where the button sits, or null when it is off. */
+	const burnButtonSaved = () => {
+		try {
+			const p = JSON.parse(localStorage.getItem(BURN_BUTTON_KEY) || 'null');
+			return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
+		} catch (e) {
+			return null;
+		}
+	};
+	/** @param {{ x: number, y: number } | null} p */
+	const saveBurnButton = (p) => {
+		try {
+			if (p) {
+				localStorage.setItem(BURN_BUTTON_KEY, JSON.stringify(p));
+			} else {
+				localStorage.removeItem(BURN_BUTTON_KEY);
+			}
+		} catch (e) {
+			/* not remembered */
+		}
+	};
+	/** @param {{ x: number, y: number }} [at] */
+	const showBurnButton = (at) => {
+		if (document.getElementById('sc-burnbutton')) {
+			return;
+		}
+		const size = 56;
+		const place = (/** @type {{ x: number, y: number }} */ p) => ({
+			x: Math.min(Math.max(0, p.x), innerWidth - size),
+			y: Math.min(Math.max(0, p.y), innerHeight - size),
+		});
+		let pos = place(at || burnButtonSaved() || { x: innerWidth - size - 24, y: Math.round(innerHeight / 3) });
+		const wrap = document.createElement('div');
+		wrap.id = 'sc-burnbutton';
+		wrap.title = 'Burn the selected item (drag to move)';
+		wrap.style.cssText = `position:fixed;left:${pos.x}px;top:${pos.y}px;width:${size}px;height:${size}px;z-index:2147483000;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffb347,#ff4500 60%,#a01800);box-shadow:0 2px 10px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:28px;cursor:grab;user-select:none;touch-action:none`;
+		wrap.textContent = '🔥';
+		const close = document.createElement('button');
+		close.textContent = '×';
+		close.title = 'Remove the burn button';
+		close.style.cssText =
+			'position:absolute;top:-6px;right:-6px;width:20px;height:20px;padding:0;border:none;border-radius:50%;background:#222;color:#fff;font:bold 14px/20px sans-serif;cursor:pointer';
+		close.addEventListener('pointerdown', (e) => e.stopPropagation());
+		close.addEventListener('click', (e) => {
+			e.stopPropagation();
+			wrap.remove();
+			saveBurnButton(null);
+		});
+		wrap.append(close);
+		// A press that doesn't move burns; one that moves drags.
+		/** @type {{ x: number, y: number, left: number, top: number, moved: boolean } | null} */
+		let drag = null;
+		wrap.addEventListener('pointerdown', (e) => {
+			if (e.button !== 0) {
+				return;
+			}
+			drag = { x: e.clientX, y: e.clientY, left: pos.x, top: pos.y, moved: false };
+			wrap.setPointerCapture(e.pointerId);
+			wrap.style.cursor = 'grabbing';
+			e.preventDefault();
+		});
+		wrap.addEventListener('pointermove', (e) => {
+			if (!drag) {
+				return;
+			}
+			const dx = e.clientX - drag.x;
+			const dy = e.clientY - drag.y;
+			if (!drag.moved && Math.hypot(dx, dy) < 5) {
+				return;
+			}
+			drag.moved = true;
+			pos = place({ x: drag.left + dx, y: drag.top + dy });
+			wrap.style.left = `${pos.x}px`;
+			wrap.style.top = `${pos.y}px`;
+		});
+		const end = (/** @type {PointerEvent} */ e) => {
+			if (!drag) {
+				return;
+			}
+			const moved = drag.moved;
+			drag = null;
+			wrap.style.cursor = 'grab';
+			if (moved) {
+				saveBurnButton(pos);
+			} else if (e.type === 'pointerup') {
+				fireBurn();
+			}
+		};
+		wrap.addEventListener('pointerup', end);
+		wrap.addEventListener('pointercancel', end);
+		// Kept on screen when the window gets smaller.
+		w.addEventListener('resize', () => {
+			pos = place(pos);
+			wrap.style.left = `${pos.x}px`;
+			wrap.style.top = `${pos.y}px`;
+		});
+		document.body.appendChild(wrap);
+		saveBurnButton(pos);
+	};
+	const burnButtonCmd = () => {
+		if (document.getElementById('sc-burnbutton')) {
+			fireToast('🔥 The burn button is already on screen (its × removes it).');
+			return;
+		}
+		showBurnButton();
+		fireToast('🔥 Burn button added: click it to burn the selected item, drag it to move it, × removes it.', 4000);
+	};
+	// Back where you left it after a reload.
+	if (burnButtonSaved()) {
+		if (document.body) {
+			showBurnButton();
+		} else {
+			w.addEventListener('DOMContentLoaded', () => showBurnButton(), { once: true });
+		}
+	}
 
 	// SlimeBeep's chat box (#sb-text) with a hidden command in it: caught before SlimeBeep sends it (capture),
 	// on Enter or on its Send button, so it never goes out as a beep or a group message.
@@ -2834,6 +2955,7 @@
 		'!addlock': () => lockListCmd('add'),
 		'!keepon': () => keepOnCmd(),
 		'!hackpanel': () => openPage('!hackpanel', () => showHack, []),
+		'!burnbutton': () => burnButtonCmd(),
 		'!owner': ownerCard,
 	};
 	const burnTyped = () => {
