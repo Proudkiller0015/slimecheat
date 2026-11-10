@@ -779,6 +779,9 @@ async function browserChecks() {
 						/** @type {any} */ (window).added = p;
 						return { open() {}, remove() {} };
 					},
+					openPanel(/** @type {string} */ id) {
+						/** @type {any} */ (window).opened = id;
+					},
 					// Like SlimeBeep's: an ECDSA P-256 proof of "slimebeep-proof|<audience>|<member>|<time>"; null until logged in.
 					async proveIdentity(/** @type {string} */ audience) {
 						const w = /** @type {any} */ (window);
@@ -1673,6 +1676,174 @@ async function browserChecks() {
 				locked.kept === '1',
 			{ history, unlocked, said, locked },
 		);
+		// 🕘 Parts of a look: 👗 Clothes ticks only the clothes, so the shirt comes back and the rope you wear now stays.
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			/** @type {Record<string, any>} */
+			const groups = {
+				Cloth: { Category: 'Appearance', AllowNone: true },
+				ItemArms: { Category: 'Item', AllowNone: true },
+				ItemLegs: { Category: 'Item', AllowNone: true },
+				ItemMouth: { Category: 'Item', AllowNone: true },
+				HairFront: { Category: 'Appearance', AllowNone: false },
+			};
+			w.scItem = (/** @type {string} */ name, /** @type {string} */ g, /** @type {any} */ extra = {}) => ({
+				Asset: { Name: name, Description: name, Group: { Name: g, Description: g, ...groups[g] } },
+				...extra,
+			});
+			w.ServerAppearanceBundle = (/** @type {any[]} */ app) =>
+				app.map((i) => ({
+					Group: i.Asset.Group.Name,
+					Name: i.Asset.Name,
+					Property: { ...(i.lock && { LockedBy: 'MetalPadlock' }), ...i.Property },
+				}));
+			w.ServerBundledItemToAppearanceItem = (/** @type {string} */ _, /** @type {any} */ b) => ({
+				...w.scItem(b.Name, b.Group),
+				Property: { ...b.Property },
+			});
+			w.Player.Appearance = [w.scItem('Shirt', 'Cloth'), w.scItem('Chains', 'ItemArms'), w.scItem('Short', 'HairFront')];
+		});
+		await page.waitForFunction(() =>
+			(JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]')[0]?.look || '').includes('Shirt'),
+		);
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			w.Player.Appearance = [w.scItem('Dress', 'Cloth'), w.scItem('Rope', 'ItemLegs'), w.scItem('Long', 'HairFront')];
+		});
+		await page.waitForFunction(() =>
+			(JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]')[0]?.look || '').includes('Dress'),
+		);
+		await new Promise((done) => setTimeout(done, 300));
+		await inPanel((h) => {
+			const sel = h.shadowRoot.getElementById('sc-outfit');
+			sel.selectedIndex = [...sel.options].findIndex((o) => o.textContent.includes('Chains'));
+			sel.dispatchEvent(new Event('change'));
+		});
+		const partsAll = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-outfitparts label')].map((l) => l.textContent.trim()));
+		await (await el('pickclothes')).click();
+		const ticked = await inPanel((h) =>
+			[...h.shadowRoot.querySelectorAll('#sc-outfitparts input')].filter((i) => i.checked).map((i) => i.parentElement.textContent.trim()),
+		);
+		await (await el('restore')).click();
+		const partial = {
+			look: await page.evaluate(() => /** @type {any} */ (window).Player.Appearance.map((/** @type {any} */ i) => i.Asset.Name).join(',')),
+			said: await text('restored'),
+		};
+		check(
+			'🕘 A look lists its items, what to take off and the body; 👗 Clothes brings back only the clothes, the rest stays as it is',
+			partsAll.length === 4 &&
+				/👗 Shirt/.test(partsAll[0]) &&
+				/⛓ Chains/.test(partsAll[1]) &&
+				/Take off Rope/.test(partsAll[2]) &&
+				/Body as it was/.test(partsAll[3]) &&
+				ticked.length === 1 &&
+				/Shirt/.test(ticked[0]) &&
+				partial.look === 'Rope,Long,Shirt' &&
+				/1 part of the look/.test(partial.said),
+			{ partsAll, ticked, partial },
+		);
+		// 🧾 Wear history: what comes off someone else is noted with its lock; !restore puts the last thing from the
+		// selected slot back on them (lock included); !restorelist opens the hidden page on them, where each thing goes
+		// back with its lock or without.
+		const worn = await page.evaluate(async () => {
+			const w = /** @type {any} */ (window);
+			const wait = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms));
+			const until = async (/** @type {() => boolean} */ ok) => {
+				for (let i = 0; i < 60 && !ok(); i++) {
+					await wait(50);
+				}
+			};
+			localStorage.removeItem('slimecheat.worn.777');
+			w.calls = [];
+			w.Drone = {
+				MemberNumber: 777,
+				Name: 'Drone',
+				AssetFamily: 'Female3DCG',
+				IsPlayer: () => false,
+				Appearance: [
+					w.scItem('Cuffs', 'ItemArms', { Property: { LockedBy: 'MetalPadlock', LockMemberNumber: 255659 } }),
+					w.scItem('Gag', 'ItemMouth'),
+				],
+			};
+			Object.assign(w, {
+				ChatRoomCharacter: [w.Player, w.Drone],
+				CurrentScreen: 'ChatRoom',
+				ServerPlayerIsInChatRoom: () => true,
+				ServerChatRoomGetAllowItem: () => true,
+				CharacterGetCurrent: () => w.Drone,
+				CharacterNickname: (/** @type {any} */ C) => C.Name || 'Me',
+				CharacterRefresh: () => w.calls.push('refresh'),
+				ChatRoomCharacterItemUpdate: (/** @type {any} */ _, /** @type {string} */ g) => w.calls.push(`item ${g}`),
+				ServerSend: (/** @type {string} */ _, /** @type {any} */ d) => w.calls.push(`${d.Type}:${d.Content}`),
+			});
+			const list = () => JSON.parse(localStorage.getItem('slimecheat.worn.777') || '[]');
+			await wait(400);
+			w.Drone.Appearance = [w.scItem('Gag', 'ItemMouth')];
+			await until(() => list().length === 1);
+			/** @type {any} */
+			const r = {
+				noted: list()
+					.map((/** @type {any} */ e) => `${e.name}${e.locked ? '🔒' : ''}`)
+					.join(','),
+			};
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			document.body.append(box);
+			const type = (/** @type {string} */ line) => {
+				box.value = line;
+				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			};
+			w.Drone.FocusGroup = { Name: 'ItemArms' };
+			type('!restore');
+			r.back = w.Drone.Appearance.map((/** @type {any} */ i) => `${i.Asset.Name}${i.Property?.LockedBy ? '🔒' : ''}`).join(',');
+			r.calls = w.calls.splice(0).join('|');
+			r.toast = document.getElementById('bc-fire-toast')?.textContent || '';
+			r.box = box.value;
+			await wait(400);
+			w.Drone.Appearance = w.Drone.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== 'ItemMouth');
+			await until(() => list().length === 2);
+			w.Drone.FocusGroup = null;
+			type('!restorelist');
+			await wait(200);
+			r.opened = w.opened;
+			box.remove();
+			return r;
+		});
+		const wearPage = {
+			shown: await visible('wear'),
+			head: await text('wearhead'),
+			rows: await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-wearlist .sc-worn b')].map((b) => b.textContent)),
+			unlockedButtons: await inPanel((h) => h.shadowRoot.querySelectorAll('#sc-wearlist .sc-worn .sb-pill').length),
+		};
+		await inPanel((h) => /** @type {HTMLElement} */ (h.shadowRoot.querySelector('#sc-wearlist .sc-worn .sb-go')).click());
+		const gagBack = {
+			look: await page.evaluate(() => /** @type {any} */ (window).Drone.Appearance.map((/** @type {any} */ i) => i.Asset.Name).join(',')),
+			said: await text('weardone'),
+		};
+		check(
+			'🧾 What comes off someone is noted with its lock; !restore puts it back on them locked, updates that slot and emotes',
+			worn.noted === 'Cuffs🔒' &&
+				worn.back === 'Gag,Cuffs🔒' &&
+				worn.calls === 'refresh|item ItemArms|Emote:puts the Cuffs back on Drone, locked.' &&
+				/Cuffs is back on Drone, locked/.test(worn.toast) &&
+				worn.box === '',
+			worn,
+		);
+		check(
+			'🧾 !restorelist opens the hidden wear page on the open player, newest first; Restore puts an item back on them',
+			worn.opened === 'slimecheat' &&
+				wearPage.shown &&
+				/came off Drone/.test(wearPage.head) &&
+				wearPage.rows.join(',') === 'Gag,🔒 Cuffs' &&
+				wearPage.unlockedButtons === 1 &&
+				gagBack.look === 'Cuffs,Gag' &&
+				/Gag is back on Drone/.test(gagBack.said),
+			{ worn, wearPage, gagBack },
+		);
+		await page.evaluate(() => {
+			delete (/** @type {any} */ (window).ChatRoomCharacter);
+		});
+		await tab('Cheats');
 		// 🧯 in ⚙ Settings: off by default, remembered, and the lock burner leaves your fireproof item's lock alone.
 		await page.evaluate(() => localStorage.removeItem('slimecheat.fireproof'));
 		await tab('⚙');
