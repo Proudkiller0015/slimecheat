@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.9.0';
+	const VERSION = '2.9.1';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
@@ -205,10 +205,12 @@
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sc-line"><div class="sb-name" id="sc-outfithead" style="flex:1">🕘 Outfit history</div><button class="sb-pill" id="sc-outfitme" hidden>Back to mine</button></div>
-					<div class="sb-hint">Every look you've worn (newest first, the last ${OUTFITS_KEPT}, kept in this browser). Pick what to bring back: all of it, only the clothes, only the restraints, or item by item.</div>
+					<div class="sb-hint">Every look you've worn (newest first, the last ${OUTFITS_KEPT}, kept in this browser). Pick what to bring back: all of it, only the clothes, only the restraints, or item by item, and whether what is worn now but wasn't in the look comes off.</div>
 					<div class="sc-line" style="margin-top:6px"><select class="sb-search" id="sc-outfit" style="flex:1"></select></div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-pill" id="sc-pickall">All</button><button class="sb-pill" id="sc-pickclothes">👗 Clothes</button><button class="sb-pill" id="sc-pickitems">⛓ Restraints</button><button class="sb-pill" id="sc-pickbody">💇 Body</button><button class="sb-pill" id="sc-picknone">None</button></div>
 					<div class="sc-parts" id="sc-outfitparts"></div>
+					<label class="sc-check"><input type="checkbox" id="sc-stripclothes"> <span id="sc-stripclothestext">✂ Take off clothes the look didn't have</span></label>
+					<label class="sc-check"><input type="checkbox" id="sc-stripitems"> <span id="sc-stripitemstext">✂ Take off restraints the look didn't have</span></label>
 					<label class="sc-check"><input type="checkbox" id="sc-outfitlocks"> 🔒 Also restore the locks</label>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-restore">Restore</button><button class="sb-pill" id="sc-mywear">🧾 Items that came off me</button></div>
 					<span class="sb-hint" id="sc-restored"></span>
@@ -1118,6 +1120,17 @@
 		outfitLocksBox.addEventListener('change', () =>
 			guard(() => localStorage.setItem(OUTFIT_LOCKS_KEY, outfitLocksBox.checked ? '1' : '0')),
 		);
+		const stripBoxes = {
+			clothes: /** @type {HTMLInputElement} */ ($('stripclothes')),
+			items: /** @type {HTMLInputElement} */ ($('stripitems')),
+		};
+		stripBoxes.clothes.checked = stripOf().clothes;
+		stripBoxes.items.checked = stripOf().items;
+		for (const box of Object.values(stripBoxes)) {
+			box.addEventListener('change', () =>
+				guard(() => saveStrip({ clothes: stripBoxes.clothes.checked, items: stripBoxes.items.checked })),
+			);
+		}
 		/** Whose looks the section shows: 0 for yours. */
 		let lookMember = 0;
 		/** The character the section shows (you, or them if they're in the room with you), or null. */
@@ -1157,8 +1170,9 @@
 			}
 		};
 
-		// What the chosen look holds, as ticked boxes: each item and piece of clothing it had, what is worn now that
-		// it didn't (to take off), and the body (hair, eyes, skin...) as one line. The buttons tick one kind at a time.
+		// What the chosen look holds, as ticked boxes: each item and piece of clothing it had,
+		// and the body (hair, eyes, skin...) as one line. The buttons tick one kind at a time. What is worn now but wasn't in
+		// the look comes off as the ✂ switches say.
 		/** @param {any} it */
 		const kindOf = (it) => {
 			const grp = it?.Asset?.Group || {};
@@ -1226,12 +1240,22 @@
 					add(`${KIND_ICON[sort]} ${itemName(it)}${lock} (${partName(it)})`, { kind: sort, put: it.Asset.Group.Name });
 				}
 			}
-			for (const it of C.Appearance || []) {
-				const sort = it?.Asset?.Group ? kindOf(it) : 'body';
-				if (sort !== 'body' && !inLook.has(it.Asset.Group.Name)) {
-					add(`✂ Take off ${itemName(it)} (${partName(it)})`, { kind: sort, off: it.Asset.Group.Name });
+			// The ✂ switches say what they would take off now.
+			const extra = extrasOf(C, inLook);
+			/**
+			 * @param {any[]} list
+			 * @param {string} what
+			 */
+			const label = (list, what) => {
+				const names = list.map(itemName);
+				let now = ' (nothing now)';
+				if (names.length) {
+					now = `: ${names.slice(0, 4).join(', ')}${names.length > 4 ? '…' : ''}`;
 				}
-			}
+				return `✂ Take off ${what} the look didn't have${now}`;
+			};
+			$('stripclothestext').textContent = label(extra.clothes, 'clothes');
+			$('stripitemstext').textContent = label(extra.items, 'restraints');
 			const body = look.items.filter((it) => kindOf(it) === 'body');
 			if (body.length) {
 				add(`${KIND_ICON.body} Body as it was (hair, eyes, skin...)`, {
@@ -1299,18 +1323,27 @@
 			}
 			const boxes = /** @type {HTMLInputElement[]} */ ([...$('outfitparts').querySelectorAll('input')]);
 			const chosen = boxes.filter((i) => i.checked);
-			if (!chosen.length) {
-				$('restored').textContent = 'Tick what to bring back first.';
+			const put = new Set(chosen.flatMap((i) => (i.dataset.put ? i.dataset.put.split(',') : [])));
+			const extra = extrasOf(C, new Set(look.items.map((it) => it.Asset.Group.Name)));
+			const off = new Set(
+				[...(stripBoxes.clothes.checked ? extra.clothes : []), ...(stripBoxes.items.checked ? extra.items : [])].map(
+					(it) => it.Asset.Group.Name,
+				),
+			);
+			if (!put.size && !off.size) {
+				$('restored').textContent = 'Tick what to bring back (or a ✂ switch) first.';
 				return;
 			}
-			const put = new Set(chosen.flatMap((i) => (i.dataset.put ? i.dataset.put.split(',') : [])));
-			const off = /** @type {Set<string>} */ (new Set(chosen.map((i) => i.dataset.off).filter(Boolean)));
 			applyLook(C, look.outfit, put, off, outfitLocksBox.checked);
-			const what = chosen.length === boxes.length ? 'Look' : `${chosen.length} part${chosen.length > 1 ? 's' : ''} of the look`;
+			let what = chosen.length === boxes.length ? 'Look' : `${chosen.length} part${chosen.length > 1 ? 's' : ''} of the look`;
+			if (!chosen.length) {
+				what = 'Nothing of the look';
+			}
+			const tookOff = off.size ? `, ${off.size} thing${off.size > 1 ? 's' : ''} taken off` : '';
 			const when = new Date(look.outfit.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 			const self = !!C.IsPlayer?.();
 			$('restored').textContent =
-				`🕘 ${what} from ${when} restored${self ? '' : ` on ${nickOf(C)}`}${outfitLocksBox.checked ? ' with its locks' : ', unlocked'}.`;
+				`🕘 ${what} from ${when} restored${self ? '' : ` on ${nickOf(C)}`}${outfitLocksBox.checked ? ' with its locks' : ', unlocked'}${tookOff}.`;
 			fillParts();
 			fillOutfitParts();
 		});
@@ -1764,19 +1797,54 @@
 			}
 		}
 	};
+	// ✂ Whether restoring a look takes off what is worn now but wasn't in it: clothes and restraints each have their own
+	// switch (remembered, both on unless switched off), used by the panel and !restoreoutfit. Body parts never come off.
+	const STRIP_KEY = 'slimecheat.outfitStrip';
+	/** @returns {{ clothes: boolean, items: boolean }} */
+	const stripOf = () => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(STRIP_KEY) || '{}');
+			return { clothes: saved?.clothes !== false, items: saved?.items !== false };
+		} catch (e) {
+			return { clothes: true, items: true };
+		}
+	};
+	/** @param {{ clothes: boolean, items: boolean }} strip */
+	const saveStrip = (strip) => {
+		try {
+			localStorage.setItem(STRIP_KEY, JSON.stringify(strip));
+		} catch (e) {
+			/* not remembered */
+		}
+	};
+	/**
+	 * What a character wears now in slots a look doesn't have: clothes and restraints apart (body parts never).
+	 * @param {any} C
+	 * @param {Set<string>} slots the look's slots
+	 * @returns {{ clothes: any[], items: any[] }}
+	 */
+	const extrasOf = (C, slots) => {
+		/** @type {{ clothes: any[], items: any[] }} */
+		const out = { clothes: [], items: [] };
+		for (const it of C.Appearance || []) {
+			const grp = it?.Asset?.Group;
+			if (grp?.AllowNone && !slots.has(grp.Name)) {
+				out[grp.Category === 'Item' ? 'items' : 'clothes'].push(it);
+			}
+		}
+		return out;
+	};
 	/**
 	 * Every slot of a look and what it takes off: all of the look's slots, and every slot the character wears now
-	 * (items and clothes) that the look didn't have.
+	 * (clothes, restraints, each as its ✂ switch says) that the look didn't have.
 	 * @param {any} C
 	 * @param {{ look: string }} outfit
 	 */
 	const wholeLook = (C, outfit) => {
 		const put = new Set(JSON.parse(outfit.look).map((/** @type {any} */ b) => b.Group));
-		const off = new Set(
-			C.Appearance.filter((/** @type {any} */ it) => it?.Asset?.Group?.AllowNone && !put.has(it.Asset.Group.Name)).map(
-				(/** @type {any} */ it) => it.Asset.Group.Name,
-			),
-		);
+		const extra = extrasOf(C, put);
+		const strip = stripOf();
+		const off = new Set([...(strip.clothes ? extra.clothes : []), ...(strip.items ? extra.items : [])].map((it) => it.Asset.Group.Name));
 		return { put, off };
 	};
 
@@ -2638,8 +2706,11 @@
 			}
 			const { put, off } = wholeLook(C, previous);
 			applyLook(C, previous, put, off, keepLock);
+			const tookOff = off.size ? `, ${off.size} thing${off.size > 1 ? 's' : ''} taken off` : '';
 			const when = new Date(previous.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-			fireToast(`🕘 ${C.IsPlayer() ? 'Your' : `${nickOf(C)}'s`} look from ${when} is back${keepLock ? ', locks included' : ', unlocked'}.`);
+			fireToast(
+				`🕘 ${C.IsPlayer() ? 'Your' : `${nickOf(C)}'s`} look from ${when} is back${keepLock ? ', locks included' : ', unlocked'}${tookOff}.`,
+			);
 		});
 	};
 	const restoreListCmd = () => {
