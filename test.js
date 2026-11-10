@@ -1623,7 +1623,7 @@ async function browserChecks() {
 			w.ServerAppearanceBundle = (/** @type {any[]} */ app) =>
 				app.map((i) => ({ Group: i.Asset.Group.Name, Name: i.Asset.Name, Property: i.lock ? { LockedBy: 'MetalPadlock' } : {} }));
 			w.ServerBundledItemToAppearanceItem = (/** @type {string} */ _, /** @type {any} */ b) => ({
-				Asset: { Name: b.Name, Description: b.Name, Group: { Name: b.Group, Description: b.Group, Category: 'Item' } },
+				Asset: { Name: b.Name, Description: b.Name, Group: { Name: b.Group, Description: b.Group, Category: 'Item', AllowNone: true } },
 				Property: { ...b.Property },
 			});
 			w.ValidationDeleteLock = (/** @type {any} */ p) => delete p.LockedBy;
@@ -1634,7 +1634,11 @@ async function browserChecks() {
 			w.ChatRoomCharacterUpdate = () => w.calls.push('room');
 			w.Player.Appearance = [
 				{
-					Asset: { Name: 'Chains', Description: 'Chains', Group: { Name: 'ItemArms', Description: 'Arms', Category: 'Item' } },
+					Asset: {
+						Name: 'Chains',
+						Description: 'Chains',
+						Group: { Name: 'ItemArms', Description: 'Arms', Category: 'Item', AllowNone: true },
+					},
 					lock: true,
 				},
 			];
@@ -1642,7 +1646,9 @@ async function browserChecks() {
 		await page.waitForFunction(() => JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]').length === 1);
 		await page.evaluate(() => {
 			/** @type {any} */ (window).Player.Appearance = [
-				{ Asset: { Name: 'Rope', Description: 'Rope', Group: { Name: 'ItemLegs', Description: 'Legs', Category: 'Item' } } },
+				{
+					Asset: { Name: 'Rope', Description: 'Rope', Group: { Name: 'ItemLegs', Description: 'Legs', Category: 'Item', AllowNone: true } },
+				},
 			];
 		});
 		await page.waitForFunction(() => JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]').length === 2);
@@ -1727,6 +1733,16 @@ async function browserChecks() {
 			sel.dispatchEvent(new Event('change'));
 		});
 		const partsAll = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-outfitparts label')].map((l) => l.textContent.trim()));
+		const strip = {
+			clothes: await text('stripclothestext'),
+			items: await text('stripitemstext'),
+			on: await inPanel(
+				(h) => h.shadowRoot.getElementById('sc-stripclothes').checked && h.shadowRoot.getElementById('sc-stripitems').checked,
+			),
+		};
+		// ✂ restraints off: the rope worn now stays.
+		await (await el('stripitems')).click();
+		strip.saved = await page.evaluate(() => localStorage.getItem('slimecheat.outfitStrip'));
 		await (await el('pickclothes')).click();
 		const ticked = await inPanel((h) =>
 			[...h.shadowRoot.querySelectorAll('#sc-outfitparts input')].filter((i) => i.checked).map((i) => i.parentElement.textContent.trim()),
@@ -1737,17 +1753,33 @@ async function browserChecks() {
 			said: await text('restored'),
 		};
 		check(
-			'🕘 A look lists its items, what to take off and the body; 👗 Clothes brings back only the clothes, the rest stays as it is',
-			partsAll.length === 4 &&
+			'🕘 A look lists its items and the body; ✂ switches (on, remembered) say what they would take off; 👗 Clothes with ✂ restraints off keeps the rope on',
+			partsAll.length === 3 &&
 				/👗 Shirt/.test(partsAll[0]) &&
 				/⛓ Chains/.test(partsAll[1]) &&
-				/Take off Rope/.test(partsAll[2]) &&
-				/Body as it was/.test(partsAll[3]) &&
+				/Body as it was/.test(partsAll[2]) &&
+				strip.on &&
+				/clothes the look didn't have \(nothing now\)/.test(strip.clothes) &&
+				/restraints the look didn't have: Rope/.test(strip.items) &&
+				strip.saved === '{"clothes":true,"items":false}' &&
 				ticked.length === 1 &&
 				/Shirt/.test(ticked[0]) &&
 				partial.look === 'Rope,Long,Shirt' &&
 				/1 part of the look/.test(partial.said),
-			{ partsAll, ticked, partial },
+			{ partsAll, strip, ticked, partial },
+		);
+		// ✂ restraints on again: restoring the clothes now also takes the rope off.
+		await (await el('stripitems')).click();
+		await (await el('pickclothes')).click();
+		await (await el('restore')).click();
+		const stripped = {
+			look: await page.evaluate(() => /** @type {any} */ (window).Player.Appearance.map((/** @type {any} */ i) => i.Asset.Name).join(',')),
+			said: await text('restored'),
+		};
+		check(
+			'✂ With the restraints switch on, the rope worn now but not in the look comes off, and the notice says so',
+			stripped.look === 'Long,Shirt' && /1 thing taken off/.test(stripped.said),
+			stripped,
 		);
 		// 🧾 Wear history: what comes off someone else is noted with its lock; !restore puts the last thing from the
 		// selected slot back on them (lock included); !restorelist opens the hidden page on them, where each thing goes
