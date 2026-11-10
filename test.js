@@ -1426,6 +1426,54 @@ async function browserChecks() {
 				fired.gameChatIgnored,
 			fired,
 		);
+		// !burnbutton: a floating 🔥 button that burns like !burn. A drag moves it (and doesn't burn), a click burns the
+		// selected item, its × removes it and forgets where it was.
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			localStorage.removeItem('slimecheat.burnButton');
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			document.body.append(box);
+			box.value = '!burnbutton';
+			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			box.remove();
+			w.CharacterGetCurrent().Appearance = [{ Asset: { Name: 'Gag', Description: 'Gag', Group: { Name: 'ItemMouth', AllowNone: true } } }];
+		});
+		const btnCentre = () =>
+			page.$eval('#sc-burnbutton', (e) => {
+				const r = e.getBoundingClientRect();
+				return { x: r.left + r.width / 2, y: r.top + r.height / 2, left: r.left, top: r.top };
+			});
+		const btnStart = await btnCentre();
+		await page.mouse.move(btnStart.x, btnStart.y);
+		await page.mouse.down();
+		await page.mouse.move(btnStart.x - 60, btnStart.y + 20, { steps: 5 });
+		await page.mouse.move(btnStart.x - 100, btnStart.y + 40, { steps: 5 });
+		await page.mouse.up();
+		const btnDragged = await btnCentre();
+		const btnAfterDrag = await page.evaluate(() => ({
+			left: /** @type {any} */ (window).CharacterGetCurrent().Appearance.length,
+			saved: JSON.parse(localStorage.getItem('slimecheat.burnButton') || 'null'),
+		}));
+		await page.mouse.click(btnDragged.x, btnDragged.y);
+		await new Promise((done) => setTimeout(done, 200));
+		const buttonBurnt = await page.evaluate(() => /** @type {any} */ (window).CharacterGetCurrent().Appearance.length);
+		await page.click('#sc-burnbutton button');
+		const btnRemoved = await page.evaluate(() => ({
+			gone: !document.getElementById('sc-burnbutton'),
+			saved: localStorage.getItem('slimecheat.burnButton'),
+		}));
+		check(
+			'!burnbutton adds a floating 🔥 button: dragging moves it (no burn) and remembers where, a click burns the selected item, × removes it',
+			btnAfterDrag.left === 1 &&
+				Math.round(btnDragged.left) === Math.round(btnStart.left - 100) &&
+				btnAfterDrag.saved &&
+				Math.round(btnAfterDrag.saved.x) === Math.round(btnDragged.left) &&
+				buttonBurnt === 0 &&
+				btnRemoved.gone &&
+				btnRemoved.saved === null,
+			{ btnStart, btnDragged, btnAfterDrag, buttonBurnt, btnRemoved },
+		);
 		// !burnlock: only the lock burns, the item stays; no lock = a note; never sent.
 		const lockBurnt = await page.evaluate(async () => {
 			const w = /** @type {any} */ (window);
@@ -2150,7 +2198,7 @@ async function browserChecks() {
 			'💻 !hackpanel opens a page with every hidden command as a button, on the player open in the game',
 			hack.shown &&
 				/On Drone · ItemArms/.test(hack.on) &&
-				hack.buttons.length === 14 &&
+				hack.buttons.length === 15 &&
 				['!burn', '!restorelock', '!addlock', '!keepon', '!listoutfit'].every((c) => hack.buttons.includes(c)),
 			hack,
 		);
