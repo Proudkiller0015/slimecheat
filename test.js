@@ -1136,7 +1136,14 @@ async function browserChecks() {
 			const gag = { Asset: { Name: 'Gag', Description: 'Ball Gag', Group: group('ItemMouth', 'Mouth') }, lock: false };
 			const hair = { Asset: { Name: 'Hair', Group: { Name: 'HairFront', Category: 'Appearance' } } };
 			w.calls = [];
-			w.Player = { MemberNumber: 255659, Name: 'Sam', AssetFamily: 'Female3DCG', Appearance: [cuffs, gag, hair], Inventory: [] };
+			w.Player = {
+				MemberNumber: 255659,
+				Name: 'Sam',
+				IsPlayer: () => true,
+				AssetFamily: 'Female3DCG',
+				Appearance: [cuffs, gag, hair],
+				Inventory: [],
+			};
 			w.InventoryGet = (/** @type {any} */ C, /** @type {string} */ g) =>
 				C.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === g) || null;
 			w.InventoryGetLock = (/** @type {any} */ i) => (i.lock ? { Asset: { Name: 'MetalPadlock' } } : null);
@@ -1821,10 +1828,10 @@ async function browserChecks() {
 			said: await text('weardone'),
 		};
 		check(
-			'🧾 What comes off someone is noted with its lock; !restore puts it back on them locked, updates that slot and emotes',
+			'🧾 What comes off someone is noted with its lock; !restore puts it back on them locked and updates that slot, silently',
 			worn.noted === 'Cuffs🔒' &&
 				worn.back === 'Gag,Cuffs🔒' &&
-				worn.calls === 'refresh|item ItemArms|Emote:puts the Cuffs back on Drone, locked.' &&
+				worn.calls === 'refresh|item ItemArms' &&
 				/Cuffs is back on Drone, locked/.test(worn.toast) &&
 				worn.box === '',
 			worn,
@@ -1839,6 +1846,281 @@ async function browserChecks() {
 				gagBack.look === 'Cuffs,Gag' &&
 				/Gag is back on Drone/.test(gagBack.said),
 			{ worn, wearPage, gagBack },
+		);
+		// 🧾 Body parts: a new hairstyle is noted (an expression change is not); Restore ticked puts several back at once,
+		// with one emote, and the hair goes back to how it was.
+		const multi = await page.evaluate(async () => {
+			const w = /** @type {any} */ (window);
+			const wait = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms));
+			const until = async (/** @type {() => boolean} */ ok) => {
+				for (let i = 0; i < 60 && !ok(); i++) {
+					await wait(50);
+				}
+			};
+			const list = () => JSON.parse(localStorage.getItem('slimecheat.worn.777') || '[]');
+			const before = list().length;
+			w.Drone.Appearance = [...w.Drone.Appearance, w.scItem('Short', 'HairFront')];
+			await wait(400);
+			// A new expression: not a change of hairstyle, so nothing is noted.
+			w.Drone.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === 'HairFront').Property = { Expression: 'Angry' };
+			await wait(400);
+			const afterExpression = list().length;
+			w.Drone.Appearance = [
+				...w.Drone.Appearance.filter((/** @type {any} */ i) => !['HairFront', 'ItemArms'].includes(i.Asset.Group.Name)),
+				w.scItem('Long', 'HairFront'),
+			];
+			await until(() => list().length === afterExpression + 1);
+			return {
+				before,
+				afterExpression,
+				outfit: list()[0].name,
+				noted: (list()[0].items || []).map((/** @type {any} */ e) => `${e.name}${e.body ? '💇' : ''}${e.changed ? '~' : ''}`).sort(),
+			};
+		});
+		await tab('Cheats');
+		await page.evaluate(() => /** @type {any} */ (window).SlimeBeep.api.openPanel('slimecheat'));
+		await inPanel((h) => /** @type {HTMLElement} */ (h.shadowRoot.getElementById('sc-mywear')).click());
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			w.CharacterGetCurrent = () => w.Drone;
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			document.body.append(box);
+			box.value = '!restorelist';
+			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			box.remove();
+		});
+		await new Promise((done) => setTimeout(done, 200));
+		const multiRows = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-wearlist .sc-worn b')].map((b) => b.textContent));
+		// ▸ opens the outfit change into its pieces, each with its own Restore.
+		await inPanel((h) => /** @type {HTMLElement} */ (h.shadowRoot.querySelector('#sc-wearlist .sc-worn .sb-pill')).click());
+		const opened = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-wearlist .sc-worn b')].map((b) => b.textContent));
+		await page.evaluate(() => {
+			/** @type {any} */ (window).calls = [];
+		});
+		await inPanel((h) => {
+			for (const t of [...h.shadowRoot.querySelectorAll('#sc-wearlist .sc-weartick')].slice(0, 1)) {
+				/** @type {HTMLInputElement} */ (t).checked = true;
+			}
+			/** @type {HTMLElement} */ (h.shadowRoot.getElementById('sc-wearticked')).click();
+		});
+		const multiBack = {
+			look: await page.evaluate(() =>
+				/** @type {any} */ (window).Drone.Appearance.map((/** @type {any} */ i) => i.Asset.Name)
+					.sort()
+					.join(','),
+			),
+			emotes: await page.evaluate(() => /** @type {any} */ (window).calls.filter((/** @type {string} */ c) => c.startsWith('Emote:'))),
+			said: await text('weardone'),
+		};
+		check(
+			'🧾 Body parts are noted when their style changes (never for an expression); a change of several is one outfit change line, ▸ shows its pieces, Restore ticked puts it all back silently',
+			multi.afterExpression === multi.before &&
+				multi.outfit === 'Outfit change' &&
+				multi.noted.join(',') === 'Cuffs,Short💇~' &&
+				/Outfit change: 2 pieces 🔒/.test(multiRows[0]) &&
+				multiRows.length === 3 &&
+				/💇 Short/.test(opened.join('|')) &&
+				opened.length === 5 &&
+				multiBack.look === 'Cuffs,Gag,Short' &&
+				multiBack.emotes.length === 0 &&
+				/are back on Drone/.test(multiBack.said),
+			{ multi, multiRows, opened, multiBack },
+		);
+		// 🔒 !restorelock: the owner's lock from cuffs that were burnt goes on the new cuffs as it was (whose it is,
+		// password), silently. !locklist shows it; !addlock puts a new lock from the game's list on another slot.
+		const lockTools = await page.evaluate(async () => {
+			const w = /** @type {any} */ (window);
+			const wait = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms));
+			const until = async (/** @type {() => boolean} */ ok) => {
+				for (let i = 0; i < 60 && !ok(); i++) {
+					await wait(50);
+				}
+			};
+			const list = () => JSON.parse(localStorage.getItem('slimecheat.worn.777') || '[]');
+			w.InventoryDoesItemAllowLock = () => true;
+			w.AssetLocks = {
+				MetalPadlock: { Name: 'MetalPadlock', Description: 'Metal Padlock' },
+				OwnerPadlock: { Name: 'OwnerPadlock', Description: 'Owner Padlock', OwnerOnly: true },
+			};
+			w.InventoryLock = (/** @type {any} */ C, /** @type {any} */ item, /** @type {string} */ lock, /** @type {number} */ by) => {
+				item.Property = { ...item.Property, LockedBy: lock, LockMemberNumber: by, Effect: [...(item.Property?.Effect || []), 'Lock'] };
+			};
+			const owner = { LockedBy: 'OwnerPadlock', LockMemberNumber: 4321, LockMemberName: 'Mistress', Password: 'PET' };
+			w.Drone.Appearance = [w.scItem('Cuffs', 'ItemArms', { Property: { ...owner } }), w.scItem('Gag', 'ItemMouth')];
+			await wait(400);
+			const n0 = list().length;
+			w.Drone.Appearance = [w.scItem('Gag', 'ItemMouth')];
+			await until(() => list().length === n0 + 1);
+			w.Drone.Appearance = [w.scItem('Gag', 'ItemMouth'), w.scItem('Chains', 'ItemArms')];
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			document.body.append(box);
+			const type = (/** @type {string} */ line) => {
+				box.value = line;
+				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			};
+			w.calls = [];
+			w.Drone.FocusGroup = { Name: 'ItemArms' };
+			type('!restorelock');
+			const chains = w.Drone.Appearance.find((/** @type {any} */ i) => i.Asset.Name === 'Chains');
+			/** @type {any} */
+			const r = {
+				lock: { ...chains.Property },
+				calls: w.calls.splice(0).join('|'),
+				toast: document.getElementById('bc-fire-toast')?.textContent || '',
+			};
+			type('!locklist');
+			await wait(200);
+			box.remove();
+			return r;
+		});
+		const lockList = {
+			shown: await visible('locks'),
+			head: await text('lockshead'),
+			rows: await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-lockslist .sc-worn b')].map((b) => b.textContent)),
+		};
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			w.Drone.FocusGroup = { Name: 'ItemMouth' };
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			document.body.append(box);
+			box.value = '!addlock';
+			box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			box.remove();
+			w.calls = [];
+		});
+		await new Promise((done) => setTimeout(done, 200));
+		const addList = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-lockslist .sc-worn b')].map((b) => b.textContent));
+		await inPanel((h) => {
+			const rows = [...h.shadowRoot.querySelectorAll('#sc-lockslist .sc-worn')];
+			const metal = rows.find((row) => /Metal Padlock/.test(row.textContent || ''));
+			/** @type {HTMLElement} */ (metal && metal.querySelector('.sb-go'))?.click();
+		});
+		const lockAdded = await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			const gag = w.Drone.Appearance.find((/** @type {any} */ i) => i.Asset.Name === 'Gag');
+			return {
+				lock: gag.Property?.LockedBy,
+				by: gag.Property?.LockMemberNumber,
+				emotes: w.calls.filter((/** @type {string} */ c) => c.startsWith('Emote:')),
+			};
+		});
+		const addSaid = await text('locksdone');
+		check(
+			'🔒 !restorelock puts the burnt cuffs’ owner lock (owner, password) on the new cuffs, silently, with a notice; !locklist lists it',
+			lockTools.lock.LockedBy === 'OwnerPadlock' &&
+				lockTools.lock.LockMemberNumber === 4321 &&
+				lockTools.lock.LockMemberName === 'Mistress' &&
+				lockTools.lock.Password === 'PET' &&
+				lockTools.lock.Effect.includes('Lock') &&
+				lockTools.calls === 'refresh|item ItemArms' &&
+				/Owner Padlock \(Mistress\) is on Drone's Chains/.test(lockTools.toast) &&
+				lockList.shown &&
+				/past locks: Drone's Chains/.test(lockList.head) &&
+				lockList.rows[0] === 'Owner Padlock (Mistress)',
+			{ lockTools, lockList },
+		);
+		check(
+			'🔒 !addlock lists every lock the game knows (mods too) and puts the picked one on the selected slot, set by you',
+			addList.join(',') === 'Metal Padlock,Owner Padlock' &&
+				lockAdded.lock === 'MetalPadlock' &&
+				lockAdded.by === 255659 &&
+				lockAdded.emotes.join('|') === "Emote:locks Drone's Gag with a Metal Padlock." &&
+				/Metal Padlock is on Drone's Gag/.test(addSaid),
+			{ addList, lockAdded, addSaid },
+		);
+		// 🔁 !keepon: the locked cuffs go back on by themselves, lock included, with a notice and nothing said in the
+		// room; !keepon again lets go. 👗 !restoreoutfit brings their previous look back, silently.
+		const keep = await page.evaluate(async () => {
+			const w = /** @type {any} */ (window);
+			const wait = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms));
+			const until = async (/** @type {() => boolean} */ ok) => {
+				for (let i = 0; i < 60 && !ok(); i++) {
+					await wait(50);
+				}
+			};
+			const box = document.createElement('textarea');
+			box.id = 'sb-text';
+			document.body.append(box);
+			const type = (/** @type {string} */ line) => {
+				box.value = line;
+				box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+			};
+			const arms = () => w.Drone.Appearance.find((/** @type {any} */ i) => i.Asset.Group.Name === 'ItemArms');
+			w.Drone.FocusGroup = { Name: 'ItemArms' };
+			type('!keepon');
+			/** @type {any} */
+			const r = { kept: Object.keys(JSON.parse(localStorage.getItem('slimecheat.keepon') || '{}')[777] || {}).join(',') };
+			w.calls = [];
+			w.Drone.Appearance = w.Drone.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== 'ItemArms');
+			await until(() => !!arms());
+			r.back = arms() ? `${arms().Asset.Name}:${arms().Property?.LockedBy}:${arms().Property?.LockMemberNumber}` : '';
+			r.emotes = w.calls.filter((/** @type {string} */ c) => c.startsWith('Emote:')).length;
+			r.toast = document.getElementById('bc-fire-toast')?.textContent || '';
+			type('!keepon');
+			r.freed = document.getElementById('bc-fire-toast')?.textContent || '';
+			r.left = Object.keys(JSON.parse(localStorage.getItem('slimecheat.keepon') || '{}')[777] || {}).length;
+			// 👗 A look that holds, then a rope added: !restoreoutfit takes it back to the look before.
+			w.Drone.Appearance = [w.scItem('Gag', 'ItemMouth')];
+			await wait(400);
+			w.Drone.Appearance = [w.scItem('Gag', 'ItemMouth'), w.scItem('Rope', 'ItemLegs')];
+			await wait(400);
+			w.calls = [];
+			w.Drone.FocusGroup = null;
+			type('!restoreoutfit');
+			r.outfit = w.Drone.Appearance.map((/** @type {any} */ i) => i.Asset.Name).join(',');
+			r.outfitEmotes = w.calls.filter((/** @type {string} */ c) => c.startsWith('Emote:')).length;
+			r.outfitToast = document.getElementById('bc-fire-toast')?.textContent || '';
+			// Your own crafted item keeps its whole craft in the wear history (the game shares only part of it).
+			w.Player.Appearance = [
+				...w.Player.Appearance,
+				w.scItem('Rope', 'ItemLegs', { Craft: { Name: 'Pet rope', MemberName: 'Sam', Property: 'Secure', Lock: 'MetalPadlock' } }),
+			];
+			await wait(400);
+			w.Player.Appearance = w.Player.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== 'ItemLegs');
+			const mine = () => JSON.parse(localStorage.getItem('slimecheat.worn.255659') || '[]');
+			await until(() => mine().some((/** @type {any} */ e) => e.name === 'Pet rope'));
+			const rope = mine().find((/** @type {any} */ e) => e.name === 'Pet rope');
+			r.craft = rope ? JSON.parse(rope.bundle).Craft : null;
+			// 💻 !hackpanel: every hidden command as a button.
+			w.Drone.FocusGroup = { Name: 'ItemArms' };
+			type('!hackpanel');
+			await wait(200);
+			box.remove();
+			return r;
+		});
+		const hack = {
+			shown: await visible('hack'),
+			on: await text('hackon'),
+			buttons: await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-hacklist button')].map((b) => b.title)),
+		};
+		check(
+			'🔁 !keepon puts the locked item back by itself (lock and owner kept), silently with a notice; !keepon again lets go',
+			keep.kept === 'ItemArms' &&
+				keep.back === 'Chains:OwnerPadlock:4321' &&
+				keep.emotes === 0 &&
+				/^🔁/.test(keep.toast) &&
+				/free again/.test(keep.freed) &&
+				keep.left === 0,
+			keep,
+		);
+		check(
+			'👗 !restoreoutfit brings back the open player’s previous look, silently; your own crafts keep their whole craft',
+			keep.outfit === 'Gag' &&
+				keep.outfitEmotes === 0 &&
+				/look from .* is back, locks included/.test(keep.outfitToast) &&
+				keep.craft?.Property === 'Secure',
+			keep,
+		);
+		check(
+			'💻 !hackpanel opens a page with every hidden command as a button, on the player open in the game',
+			hack.shown &&
+				/On Drone · ItemArms/.test(hack.on) &&
+				hack.buttons.length === 14 &&
+				['!burn', '!restorelock', '!addlock', '!keepon', '!listoutfit'].every((c) => hack.buttons.includes(c)),
+			hack,
 		);
 		await page.evaluate(() => {
 			delete (/** @type {any} */ (window).ChatRoomCharacter);
