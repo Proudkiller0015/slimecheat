@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.7.1';
+	const VERSION = '2.8.0';
 	w.SlimeCheat = Object.freeze({ version: VERSION });
 
 	/** Where uploads go (tests point it at a local copy). */
@@ -167,6 +167,10 @@
 			#sc-root label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; flex: 1; }
 			#sc-root [hidden] { display: none !important; }
 			#sc-root label.sc-check { flex-direction: row; align-items: center; gap: 6px; font-size: 13px; margin-top: 6px; cursor: pointer; }
+			.sc-parts { max-height: 190px; overflow: auto; margin-top: 4px; }
+			.sc-parts label.sc-check { margin-top: 2px; }
+			.sc-worn .sb-main { flex: 1; min-width: 0; }
+			.sc-worn .sb-main b { overflow-wrap: anywhere; }
 		</style>
 		<div id="sc-root">
 			<div class="sc-tabs" id="sc-tabs">
@@ -201,9 +205,12 @@
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sb-name">🕘 Outfit history</div>
-					<div class="sb-hint">Every look you've worn (newest first, the last ${OUTFITS_KEPT}, kept in this browser). Restore puts the whole look back.</div>
-					<div class="sc-line" style="margin-top:6px"><select class="sb-search" id="sc-outfit" style="flex:1"></select><button class="sb-go" id="sc-restore">Restore</button></div>
+					<div class="sb-hint">Every look you've worn (newest first, the last ${OUTFITS_KEPT}, kept in this browser). Pick what to bring back: all of it, only the clothes, only the restraints, or item by item.</div>
+					<div class="sc-line" style="margin-top:6px"><select class="sb-search" id="sc-outfit" style="flex:1"></select></div>
+					<div class="sc-line" style="margin-top:6px"><button class="sb-pill" id="sc-pickall">All</button><button class="sb-pill" id="sc-pickclothes">👗 Clothes</button><button class="sb-pill" id="sc-pickitems">⛓ Restraints</button><button class="sb-pill" id="sc-pickbody">💇 Body</button><button class="sb-pill" id="sc-picknone">None</button></div>
+					<div class="sc-parts" id="sc-outfitparts"></div>
 					<label class="sc-check"><input type="checkbox" id="sc-outfitlocks"> 🔒 Also restore the locks</label>
+					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-restore">Restore</button><button class="sb-pill" id="sc-mywear">🧾 Items that came off me</button></div>
 					<span class="sb-hint" id="sc-restored"></span>
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
@@ -221,6 +228,12 @@
 					<div class="sb-hint">Adds every item in the game to your own inventory (saved to your account).</div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-allitems">Unlock all items</button><span class="sb-hint" id="sc-itemsdone"></span></div>
 				</div>
+			</div>
+			<div class="sc-page" id="sc-wear" hidden>
+				<div class="sc-line"><div class="sb-name" id="sc-wearhead" style="flex:1"></div><button class="sb-pill" id="sc-wearclose" title="Close">✕</button></div>
+				<div class="sb-hint">What came off, newest first (the last ${WORN_KEPT}, kept in this browser). Restore puts it back as it was, lock included; Unlocked puts it back without its lock.</div>
+				<span class="sb-hint" id="sc-weardone"></span>
+				<div id="sc-wearlist"></div>
 			</div>
 			<div class="sc-page" id="sc-settings" hidden>
 				<div class="sb-hint">Cheats work fully by default. These settings hold some of them back.</div>
@@ -300,7 +313,7 @@
 				$('done').hidden = true;
 			}
 			$('upload').hidden = !upload;
-			for (const p of ['files', 'dice', 'cheats', 'settings']) {
+			for (const p of ['files', 'dice', 'cheats', 'settings', 'wear']) {
 				$(p).hidden = name !== p;
 			}
 			for (const tab of root.querySelectorAll('#sc-tabs [data-page]')) {
@@ -1116,37 +1129,226 @@
 		};
 		fillOutfits();
 		w.addEventListener('slimecheat-outfits', () => guard(fillOutfits));
-		onClick('restore', () => {
-			const g = game();
+
+		// What the chosen look holds, as ticked boxes: each item and piece of clothing it had, what you wear now that
+		// it didn't (to take off), and the body (hair, eyes, skin...) as one line. The buttons tick one kind at a time.
+		/** @param {any} it */
+		const kindOf = (it) => {
+			const grp = it?.Asset?.Group || {};
+			if (grp.Category === 'Item') {
+				return 'items';
+			}
+			return grp.AllowNone ? 'clothes' : 'body';
+		};
+		/** @type {Record<string, string>} */
+		const KIND_ICON = { items: '⛓', clothes: '👗', body: '💇' };
+		/** @param {any} it */
+		const itemName = (it) => it.Craft?.Name || it.Asset.Description || it.Asset.Name;
+		/** @param {any} it */
+		const partName = (it) => it.Asset.Group.Description || it.Asset.Group.Name;
+		/** The chosen look and its items as the game's own (locks still on), or null. */
+		const chosenLook = () => {
 			const at = /** @type {HTMLSelectElement} */ ($('outfit')).value;
 			const outfit = outfits().find((o) => String(o.at) === at);
-			if (!g || !outfit) {
-				return;
-			}
-			if (typeof w.ServerBundledItemToAppearanceItem !== 'function' || typeof w.ValidationDeleteLock !== 'function') {
-				fail(
-					'⚠ The game changed (ServerBundledItemToAppearanceItem or ValidationDeleteLock is gone): restoring is off until SlimeCheat is updated.',
-				);
-				return;
-			}
 			const me = player();
+			if (!outfit || !me || typeof w.ServerBundledItemToAppearanceItem !== 'function') {
+				return null;
+			}
+			/** @type {any[]} */
 			const items = JSON.parse(outfit.look)
 				.map((/** @type {any} */ b) => w.ServerBundledItemToAppearanceItem(me.AssetFamily, b))
 				.filter(Boolean);
-			if (!outfitLocksBox.checked) {
-				for (const it of items) {
-					w.ValidationDeleteLock(it.Property, false);
+			return { outfit, items };
+		};
+		let partsFor = '';
+		const fillOutfitParts = () => {
+			const box = $('outfitparts');
+			const look = chosenLook();
+			const me = player();
+			// Same look shown again (you changed clothes meanwhile): keep the ticks you set; new lines come ticked.
+			/** @type {Map<string, boolean>} */
+			const ticks = new Map();
+			if (look && String(look.outfit.at) === partsFor) {
+				for (const input of /** @type {NodeListOf<HTMLInputElement>} */ (box.querySelectorAll('input'))) {
+					ticks.set(`${input.dataset.put || ''}|${input.dataset.off || ''}`, input.checked);
 				}
 			}
-			me.Appearance = items;
+			partsFor = look ? String(look.outfit.at) : '';
+			box.replaceChildren();
+			if (!look || !me) {
+				return;
+			}
+			/**
+			 * @param {string} text
+			 * @param {Record<string, string>} data
+			 */
+			const add = (text, data) => {
+				const label = make('label', 'sc-check');
+				const input = /** @type {HTMLInputElement} */ (make('input'));
+				input.type = 'checkbox';
+				Object.assign(input.dataset, data);
+				input.checked = ticks.get(`${data.put || ''}|${data.off || ''}`) ?? true;
+				label.append(input, ` ${text}`);
+				box.append(label);
+			};
+			const inLook = new Set(look.items.map((it) => it.Asset.Group.Name));
+			for (const it of look.items) {
+				const sort = kindOf(it);
+				if (sort !== 'body') {
+					const lock = it.Property?.LockedBy ? ' 🔒' : '';
+					add(`${KIND_ICON[sort]} ${itemName(it)}${lock} (${partName(it)})`, { kind: sort, put: it.Asset.Group.Name });
+				}
+			}
+			for (const it of me.Appearance || []) {
+				const sort = it?.Asset?.Group ? kindOf(it) : 'body';
+				if (sort !== 'body' && !inLook.has(it.Asset.Group.Name)) {
+					add(`✂ Take off ${itemName(it)} (${partName(it)})`, { kind: sort, off: it.Asset.Group.Name });
+				}
+			}
+			const body = look.items.filter((it) => kindOf(it) === 'body');
+			if (body.length) {
+				add(`${KIND_ICON.body} Body as it was (hair, eyes, skin...)`, {
+					kind: 'body',
+					put: body.map((it) => it.Asset.Group.Name).join(','),
+				});
+			}
+		};
+		/** @param {string} sort which kind to tick: '*' for all of them, '' for none */
+		const pick = (sort) => {
+			for (const input of /** @type {NodeListOf<HTMLInputElement>} */ ($('outfitparts').querySelectorAll('input'))) {
+				input.checked = sort === '*' || input.dataset.kind === sort;
+			}
+		};
+		onClick('pickall', () => pick('*'));
+		onClick('pickclothes', () => pick('clothes'));
+		onClick('pickitems', () => pick('items'));
+		onClick('pickbody', () => pick('body'));
+		onClick('picknone', () => pick(''));
+		$('outfit').addEventListener('change', () => guard(fillOutfitParts));
+		fillOutfitParts();
+		// What you wear changed (a new look was saved): the take-off lines follow it, your ticks stay.
+		w.addEventListener('slimecheat-outfits', () => guard(fillOutfitParts));
+		onClick('restore', () => {
+			const g = game();
+			const look = chosenLook();
+			if (!g || !look) {
+				return;
+			}
+			if (typeof w.ValidationDeleteLock !== 'function') {
+				fail('⚠ The game changed (ValidationDeleteLock is gone): restoring is off until SlimeCheat is updated.');
+				return;
+			}
+			const me = player();
+			// The ticks must be the chosen look's (the list follows the select, but only on its change event).
+			if (String(look.outfit.at) !== partsFor) {
+				fillOutfitParts();
+			}
+			const boxes = /** @type {HTMLInputElement[]} */ ([...$('outfitparts').querySelectorAll('input')]);
+			const chosen = boxes.filter((i) => i.checked);
+			if (!chosen.length) {
+				$('restored').textContent = 'Tick what to bring back first.';
+				return;
+			}
+			const put = new Set(chosen.flatMap((i) => (i.dataset.put ? i.dataset.put.split(',') : [])));
+			const off = new Set(chosen.map((i) => i.dataset.off).filter(Boolean));
+			const items = look.items.filter((it) => put.has(it.Asset.Group.Name));
+			if (!outfitLocksBox.checked) {
+				for (const it of items) {
+					if (it.Property) {
+						w.ValidationDeleteLock(it.Property, false);
+					}
+				}
+			}
+			me.Appearance = [
+				...me.Appearance.filter((/** @type {any} */ it) => !put.has(it?.Asset?.Group?.Name) && !off.has(it?.Asset?.Group?.Name)),
+				...items,
+			];
 			pushLook(g);
 			if (typeof w.ServerPlayerAppearanceSync === 'function') {
 				w.ServerPlayerAppearanceSync();
 			}
-			$('restored').textContent =
-				`🕘 Look from ${new Date(outfit.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} restored${outfitLocksBox.checked ? ' with its locks' : ', unlocked'}.`;
+			const what = chosen.length === boxes.length ? 'Look' : `${chosen.length} part${chosen.length > 1 ? 's' : ''} of the look`;
+			const when = new Date(look.outfit.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+			$('restored').textContent = `🕘 ${what} from ${when} restored${outfitLocksBox.checked ? ' with its locks' : ', unlocked'}.`;
 			fillParts();
+			fillOutfitParts();
 		});
+
+		// ---- 🧾 Wear history page: hidden from the tabs. !restorelist opens it on the player open in the game,
+		// 🧾 on yourself. Each thing that came off can go back on, with its lock or without.
+		let wearMember = 0;
+		/** The member the page shows, if in the room with you. */
+		const wearChar = () => watched().find((c) => c.MemberNumber === wearMember) || null;
+		const fillWear = () => {
+			const C = wearChar();
+			let who = `#${wearMember}`;
+			if (C) {
+				who = C.IsPlayer() ? 'you' : nickOf(C);
+			}
+			$('wearhead').textContent = `🧾 What came off ${who}`;
+			const box = $('wearlist');
+			box.replaceChildren();
+			const list = wornList(wearMember);
+			if (!list.length) {
+				box.append(make('div', 'sb-hint', 'Nothing yet: SlimeCheat notes what comes off while you are in the room with them.'));
+				return;
+			}
+			list.forEach((e, i) => {
+				const row = make('div', 'sb-row sc-worn');
+				const main = make('div', 'sb-main');
+				const when = new Date(e.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+				main.append(
+					make('b', '', `${e.locked ? '🔒 ' : ''}${e.name}`),
+					make('div', 'sb-hint', `${e.part} · ${e.changed ? 'changed' : 'came off'} ${when}`),
+				);
+				const back = make('button', 'sb-go', 'Restore');
+				back.addEventListener('click', () => guard(() => restoreFromList(i, true)));
+				row.append(main, back);
+				if (e.locked) {
+					const bare = make('button', 'sb-pill', 'Unlocked');
+					bare.addEventListener('click', () => guard(() => restoreFromList(i, false)));
+					row.append(bare);
+				}
+				box.append(row);
+			});
+		};
+		/**
+		 * @param {number} i
+		 * @param {boolean} keepLock
+		 */
+		const restoreFromList = (i, keepLock) => {
+			const entry = wornList(wearMember)[i];
+			const C = wearChar();
+			if (!entry) {
+				return;
+			}
+			if (!C) {
+				$('weardone').textContent = "They aren't in the room with you.";
+				return;
+			}
+			$('weardone').textContent = restoreWorn(C, entry, keepLock);
+			fillParts();
+		};
+		showWear = (/** @type {number} */ n) => {
+			wearMember = n;
+			$('weardone').textContent = '';
+			page('wear');
+			fillWear();
+		};
+		onClick('mywear', () => {
+			const me = player();
+			if (me && showWear) {
+				showWear(me.MemberNumber);
+			}
+		});
+		onClick('wearclose', () => page('cheats'));
+		w.addEventListener('slimecheat-worn', (ev) =>
+			guard(() => {
+				if (!$('wear').hidden && /** @type {CustomEvent} */ (ev).detail === wearMember) {
+					fillWear();
+				}
+			}),
+		);
 
 		// Keys typed in the panel stay out of the game.
 		for (const type of ['keydown', 'keyup', 'keypress']) {
@@ -1218,6 +1420,162 @@
 			console.warn('SlimeCheat outfit history:', e);
 		}
 	}, OUTFIT_CHECK_MS);
+
+	// ---- 🧾 Wear history: what comes off each player in the room (you too), one item or piece of clothing at a time,
+	// as the game saves it (lock and its settings included), newest first, kept in this browser per member number.
+	// Like the outfit history, a change counts once it holds for one check. Body parts are never in it.
+	const WORN_KEY = 'slimecheat.worn.';
+	const WORN_KEPT = 40;
+	/** @type {Map<number, { stable: Record<string, string>, seen: string }>} */
+	const wornSeen = new Map();
+	/** @type {((n: number) => void) | null} Opens the wear history page on a member (set once the panel is built). */
+	let showWear = null;
+	/**
+	 * What came off a member, newest first.
+	 * @param {number} n
+	 * @returns {{ at: number, group: string, bundle: string, name: string, part: string, locked: boolean, changed: boolean }[]}
+	 */
+	const wornList = (n) => {
+		try {
+			const list = JSON.parse(localStorage.getItem(WORN_KEY + n) || '[]');
+			return Array.isArray(list) ? list : [];
+		} catch (e) {
+			return [];
+		}
+	};
+	/** @param {any} C */
+	const nickOf = (C) => (typeof w.CharacterNickname === 'function' ? w.CharacterNickname(C) : C.Nickname || C.Name || `#${C.MemberNumber}`);
+	/** Everyone whose wear is watched: the room, or just you outside one. */
+	const watched = () => {
+		const me = player();
+		if (!me) {
+			return [];
+		}
+		const room = Array.isArray(w.ChatRoomCharacter) && w.ChatRoomCharacter.length ? w.ChatRoomCharacter : [me];
+		return room.filter((/** @type {any} */ C) => C && C.MemberNumber && Array.isArray(C.Appearance));
+	};
+	/**
+	 * A character's removable things (items and clothes, not body parts): slot -> the thing as the game saves it.
+	 * @param {any} C
+	 * @returns {Record<string, string>}
+	 */
+	const removable = (C) => {
+		/** @type {Record<string, string>} */
+		const out = {};
+		for (const it of C.Appearance) {
+			const grp = it?.Asset?.Group;
+			if (grp?.AllowNone) {
+				const bundle = w.ServerAppearanceBundle([it])[0];
+				if (bundle) {
+					out[grp.Name] = JSON.stringify(bundle);
+				}
+			}
+		}
+		return out;
+	};
+	const trackWorn = () => {
+		if (typeof w.ServerAppearanceBundle !== 'function') {
+			return;
+		}
+		for (const C of watched()) {
+			const now = removable(C);
+			const key = JSON.stringify(now);
+			const seen = wornSeen.get(C.MemberNumber);
+			if (!seen) {
+				wornSeen.set(C.MemberNumber, { stable: now, seen: key });
+				continue;
+			}
+			if (key !== seen.seen) {
+				seen.seen = key;
+				continue;
+			}
+			const gone = Object.entries(seen.stable).filter(([g, b]) => now[g] !== b);
+			seen.stable = now;
+			if (!gone.length) {
+				continue;
+			}
+			const list = wornList(C.MemberNumber);
+			for (const [g, b] of gone) {
+				const bundle = JSON.parse(b);
+				const asset = typeof w.AssetGet === 'function' ? w.AssetGet(C.AssetFamily || 'Female3DCG', g, bundle.Name) : null;
+				list.unshift({
+					at: Date.now(),
+					group: g,
+					bundle: b,
+					name: bundle.Craft?.Name || asset?.Description || bundle.Name,
+					part: asset?.Group?.Description || g,
+					locked: !!bundle.Property?.LockedBy,
+					changed: !!now[g] && JSON.parse(now[g]).Name === bundle.Name,
+				});
+			}
+			// Storage full: the oldest go first.
+			for (let keep = Math.min(list.length, WORN_KEPT); keep > 0; keep--) {
+				try {
+					localStorage.setItem(WORN_KEY + C.MemberNumber, JSON.stringify(list.slice(0, keep)));
+					break;
+				} catch (e) {
+					/* too big: try with one fewer */
+				}
+			}
+			w.dispatchEvent(new CustomEvent('slimecheat-worn', { detail: C.MemberNumber }));
+		}
+	};
+	setInterval(() => {
+		try {
+			trackWorn();
+		} catch (e) {
+			console.warn('SlimeCheat wear history:', e);
+		}
+	}, OUTFIT_CHECK_MS);
+	/**
+	 * Puts something that came off back on a character, as it was: its lock and the lock's settings too, unless
+	 * keepLock is false. Whatever is in that slot now comes off first. Returns what to tell the player.
+	 * @param {any} C
+	 * @param {{ group: string, bundle: string, name: string }} entry
+	 * @param {boolean} keepLock
+	 */
+	const restoreWorn = (C, entry, keepLock) => {
+		const missing = ['ServerBundledItemToAppearanceItem', 'ValidationDeleteLock', 'CharacterRefresh'].filter(
+			(n) => typeof w[n] !== 'function',
+		);
+		if (missing.length) {
+			throw new Error(`The game changed (${missing.join(', ')} is gone): restoring is off until SlimeCheat is updated.`);
+		}
+		const self = !!C.IsPlayer?.();
+		if (!self && typeof w.ServerChatRoomGetAllowItem === 'function' && !w.ServerChatRoomGetAllowItem(player(), C)) {
+			throw new Error(`${nickOf(C)} doesn't allow you to use items on them.`);
+		}
+		const item = w.ServerBundledItemToAppearanceItem(C.AssetFamily || 'Female3DCG', JSON.parse(entry.bundle));
+		if (!item) {
+			throw new Error(`${entry.name} isn't in the game anymore.`);
+		}
+		if (!keepLock && item.Property) {
+			w.ValidationDeleteLock(item.Property, false);
+		}
+		const locked = !!item.Property?.LockedBy;
+		C.Appearance = [...C.Appearance.filter((/** @type {any} */ it) => it?.Asset?.Group?.Name !== entry.group), item];
+		w.CharacterRefresh(C, self, false);
+		if (self) {
+			// Tell the room, and save it to your account.
+			if (typeof w.ChatRoomCharacterUpdate === 'function') {
+				w.ChatRoomCharacterUpdate(C);
+			}
+			if (typeof w.ServerPlayerAppearanceSync === 'function') {
+				w.ServerPlayerAppearanceSync();
+			}
+		} else if (typeof w.ChatRoomCharacterItemUpdate === 'function') {
+			w.ChatRoomCharacterItemUpdate(C, entry.group);
+		}
+		const inRoom = typeof w.ServerPlayerIsInChatRoom === 'function' && w.ServerPlayerIsInChatRoom();
+		if (inRoom && typeof w.ServerSend === 'function') {
+			const how = locked ? ', locked' : '';
+			w.ServerSend('ChatRoomChat', {
+				Content: self ? `puts their ${entry.name} back on${how}.` : `puts the ${entry.name} back on ${nickOf(C)}${how}.`,
+				Type: 'Emote',
+			});
+		}
+		return `🕘 ${entry.name} is back on ${self ? 'you' : nickOf(C)}${locked ? ', locked' : ''}.`;
+	};
 
 	/**
 	 * The hidden commands' note, in the middle of the screen (one at a time).
@@ -1509,6 +1867,45 @@
 		};
 	})();
 
+	// ---- !restore and !restorelist: on the player open in the game (or yourself), from the 🧾 wear history.
+	// !restore puts back the last thing that came off the selected slot, or off them at all with no slot selected,
+	// lock included. !restorelist opens SlimeCheat on everything that came off them, to put back one by one.
+	const restoreCmd = () => {
+		try {
+			const C = typeof w.CharacterGetCurrent === 'function' ? w.CharacterGetCurrent() : null;
+			if (!C) {
+				fireToast('Open someone first (or yourself), then !restore.');
+				return;
+			}
+			const group = C.FocusGroup?.Name;
+			const list = wornList(C.MemberNumber);
+			const entry = group ? list.find((e) => e.group === group) : list[0];
+			if (!entry) {
+				let where = C.IsPlayer() ? 'you' : nickOf(C);
+				if (group) {
+					where = 'that slot';
+				}
+				fireToast(`Nothing came off ${where} while SlimeCheat was watching.`);
+				return;
+			}
+			fireToast(restoreWorn(C, entry, true));
+		} catch (err) {
+			console.error('[SlimeCheat restore]', err);
+			fireToast(`Restore failed: ${/** @type {Error} */ (err).message}`);
+		}
+	};
+	const restoreListCmd = () => {
+		const C = (typeof w.CharacterGetCurrent === 'function' && w.CharacterGetCurrent()) || player();
+		const api = slimeBeep();
+		if (!C || !api || typeof api.openPanel !== 'function') {
+			fireToast('SlimeCheat needs SlimeBeep and a login for !restorelist.');
+			return;
+		}
+		api.openPanel('slimecheat');
+		// The panel is built when it first opens.
+		setTimeout(() => (showWear ? showWear(C.MemberNumber) : fireToast('Open SlimeCheat once, then !restorelist again.')), 50);
+	};
+
 	// ---- !owner: the list of hidden commands. Only answers to the owner's member number; for anyone else it is an
 	// ordinary line and goes out as typed.
 	const ownerCard = () =>
@@ -1520,6 +1917,8 @@
 				'!burnlock: burns only the lock off the selected slot',
 				'!burnlocks: burns every lock off the open player',
 				'!burnall: burns every item off the open player (clothes stay)',
+				'!restore: puts back what last came off the selected slot (or off the open player), lock included',
+				'!restorelist: everything that came off the open player, to put back one by one',
 				'!cheats: opens SlimeCheat',
 				'!owner: this list',
 				'',
@@ -1536,6 +1935,8 @@
 		'!burnlock': () => fireBurnLock(),
 		'!burnlocks': () => fireBurnEvery('locks'),
 		'!burnall': () => fireBurnEvery('items'),
+		'!restore': () => restoreCmd(),
+		'!restorelist': () => restoreListCmd(),
 		'!owner': ownerCard,
 	};
 	const burnTyped = () => {
