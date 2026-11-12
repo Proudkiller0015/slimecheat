@@ -811,6 +811,20 @@ async function browserChecks() {
 				JSON.stringify({ url: 'https://song-upload.slimebeep-relay.workers.dev/', key: 'old-key' }),
 			);
 		});
+		// Histories from before 2.11.0 sit in localStorage: SlimeCheat moves them to IndexedDB. A player out of sight for
+		// longer than a session gap (40404) is cleared; one seen lately (31337) and your own other account (50505) are kept.
+		await page.evaluate(async () => {
+			await new Promise((done) => {
+				const req = indexedDB.deleteDatabase('slimecheat-history');
+				req.onsuccess = req.onerror = req.onblocked = () => done(undefined);
+			});
+			const look = (/** @type {number} */ at) => JSON.stringify([{ at, look: '[]', items: 0, locks: 0, names: [] }]);
+			localStorage.setItem('slimecheat.outfits.31337', look(Date.now() - 60000));
+			localStorage.setItem('slimecheat.worn.31337', JSON.stringify([{ at: Date.now() - 60000, group: 'ItemArms', bundle: '{}', name: 'Cuffs', part: 'Arms', locked: false, changed: false }]));
+			localStorage.setItem('slimecheat.outfits.40404', look(Date.now() - 2 * 3600000));
+			localStorage.setItem('slimecheat.outfits.50505', look(Date.now() - 2 * 3600000));
+			localStorage.setItem('slimecheat.selves', JSON.stringify([50505]));
+		});
 		await page.evaluate((base) => {
 			/** @type {any} */ (window).SlimeCheatServer = base;
 			// Outfit history checks every 3 s in the game; quicker here.
@@ -1182,6 +1196,39 @@ async function browserChecks() {
 		await (await el('unlock')).click();
 		const burnt = await page.evaluate(() => /** @type {any} */ (window).calls.join(','));
 		check('Burn the lock unlocks only that slot, then saves my look and tells the room', burnt === 'unlock Cuffs,refresh,room', burnt);
+		await page.waitForFunction(() => /** @type {any} */ (window).SlimeCheat.historyReady() && (localStorage.getItem('slimecheat.selves') || '').includes('255659'));
+		const moved = await page.evaluate(async () => {
+			const sc = /** @type {any} */ (window).SlimeCheat;
+			const rows = await new Promise((done) => {
+				const req = indexedDB.open('slimecheat-history');
+				req.onsuccess = () => {
+					const get = req.result.transaction('lists').objectStore('lists').getAllKeys();
+					get.onsuccess = () => {
+						req.result.close();
+						done(get.result.map(String).sort());
+					};
+				};
+			});
+			return {
+				kept: [sc.history('outfits', 31337).length, sc.history('worn', 31337).length, sc.history('outfits', 50505).length],
+				cleared: sc.history('outfits', 40404).length,
+				leftInLocalStorage: Object.keys(localStorage).filter((k) => /^slimecheat\.(outfits|worn)\./.test(k)),
+				rows,
+				selves: JSON.parse(localStorage.getItem('slimecheat.selves') || '[]'),
+			};
+		});
+		check(
+			'Histories move from localStorage to IndexedDB; a player gone longer than a session is cleared, a recent one and your own accounts are kept',
+			moved.kept.join() === '1,1,1' &&
+				moved.cleared === 0 &&
+				moved.leftInLocalStorage.length === 0 &&
+				moved.rows.includes('outfits.31337') &&
+				moved.rows.includes('worn.31337') &&
+				!moved.rows.includes('outfits.40404') &&
+				moved.selves.includes(255659),
+			moved,
+		);
+
 		await inPanel((h) => {
 			const sel = h.shadowRoot.getElementById('sc-part');
 			sel.value = 'ItemMouth';
@@ -1667,7 +1714,7 @@ async function browserChecks() {
 		// 🕘 Outfit history: a look that holds is saved, newest first; Restore puts it back, unlocked unless 🔒 is on.
 		await page.evaluate(() => {
 			const w = /** @type {any} */ (window);
-			localStorage.removeItem('slimecheat.outfits.255659');
+			/** @type {any} */ (window).SlimeCheat.forget('outfits', 255659);
 			w.ServerAppearanceBundle = (/** @type {any[]} */ app) =>
 				app.map((i) => ({ Group: i.Asset.Group.Name, Name: i.Asset.Name, Property: i.lock ? { LockedBy: 'MetalPadlock' } : {} }));
 			w.ServerBundledItemToAppearanceItem = (/** @type {string} */ _, /** @type {any} */ b) => ({
@@ -1691,7 +1738,7 @@ async function browserChecks() {
 				},
 			];
 		});
-		await page.waitForFunction(() => JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]').length === 1);
+		await page.waitForFunction(() => /** @type {any} */ (window).SlimeCheat.history('outfits', 255659).length === 1);
 		await page.evaluate(() => {
 			/** @type {any} */ (window).Player.Appearance = [
 				{
@@ -1699,7 +1746,7 @@ async function browserChecks() {
 				},
 			];
 		});
-		await page.waitForFunction(() => JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]').length === 2);
+		await page.waitForFunction(() => /** @type {any} */ (window).SlimeCheat.history('outfits', 255659).length === 2);
 		await new Promise((done) => setTimeout(done, 300));
 		const history = await inPanel((h) => [...h.shadowRoot.getElementById('sc-outfit').options].map((o) => o.textContent));
 		const pickOutfit = (/** @type {string} */ name) =>
@@ -1765,14 +1812,14 @@ async function browserChecks() {
 			w.Player.Appearance = [w.scItem('Shirt', 'Cloth'), w.scItem('Chains', 'ItemArms'), w.scItem('Short', 'HairFront')];
 		});
 		await page.waitForFunction(() =>
-			(JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]')[0]?.look || '').includes('Shirt'),
+			(/** @type {any} */ (window).SlimeCheat.history('outfits', 255659)[0]?.look || '').includes('Shirt'),
 		);
 		await page.evaluate(() => {
 			const w = /** @type {any} */ (window);
 			w.Player.Appearance = [w.scItem('Dress', 'Cloth'), w.scItem('Rope', 'ItemLegs'), w.scItem('Long', 'HairFront')];
 		});
 		await page.waitForFunction(() =>
-			(JSON.parse(localStorage.getItem('slimecheat.outfits.255659') || '[]')[0]?.look || '').includes('Dress'),
+			(/** @type {any} */ (window).SlimeCheat.history('outfits', 255659)[0]?.look || '').includes('Dress'),
 		);
 		await new Promise((done) => setTimeout(done, 300));
 		await inPanel((h) => {
@@ -1840,7 +1887,7 @@ async function browserChecks() {
 					await wait(50);
 				}
 			};
-			localStorage.removeItem('slimecheat.worn.777');
+			/** @type {any} */ (window).SlimeCheat.forget('worn', 777);
 			w.calls = [];
 			w.Drone = {
 				MemberNumber: 777,
@@ -1863,7 +1910,7 @@ async function browserChecks() {
 				ChatRoomCharacterItemUpdate: (/** @type {any} */ _, /** @type {string} */ g) => w.calls.push(`item ${g}`),
 				ServerSend: (/** @type {string} */ _, /** @type {any} */ d) => w.calls.push(`${d.Type}:${d.Content}`),
 			});
-			const list = () => JSON.parse(localStorage.getItem('slimecheat.worn.777') || '[]');
+			const list = () => /** @type {any} */ (window).SlimeCheat.history('worn', 777);
 			await wait(400);
 			w.Drone.Appearance = [w.scItem('Gag', 'ItemMouth')];
 			await until(() => list().length === 1);
@@ -1937,7 +1984,7 @@ async function browserChecks() {
 					await wait(50);
 				}
 			};
-			const list = () => JSON.parse(localStorage.getItem('slimecheat.worn.777') || '[]');
+			const list = () => /** @type {any} */ (window).SlimeCheat.history('worn', 777);
 			const before = list().length;
 			w.Drone.Appearance = [...w.Drone.Appearance, w.scItem('Short', 'HairFront')];
 			await wait(400);
@@ -2017,7 +2064,7 @@ async function browserChecks() {
 					await wait(50);
 				}
 			};
-			const list = () => JSON.parse(localStorage.getItem('slimecheat.worn.777') || '[]');
+			const list = () => /** @type {any} */ (window).SlimeCheat.history('worn', 777);
 			w.InventoryDoesItemAllowLock = () => true;
 			w.AssetLocks = {
 				MetalPadlock: { Name: 'MetalPadlock', Description: 'Metal Padlock' },
@@ -2160,7 +2207,7 @@ async function browserChecks() {
 			];
 			await wait(400);
 			w.Player.Appearance = w.Player.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== 'ItemLegs');
-			const mine = () => JSON.parse(localStorage.getItem('slimecheat.worn.255659') || '[]');
+			const mine = () => /** @type {any} */ (window).SlimeCheat.history('worn', 255659);
 			await until(() => mine().some((/** @type {any} */ e) => e.name === 'Pet rope'));
 			const rope = mine().find((/** @type {any} */ e) => e.name === 'Pet rope');
 			r.craft = rope ? JSON.parse(rope.bundle).Craft : null;
