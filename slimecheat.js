@@ -7,8 +7,16 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.10.0';
-	w.SlimeCheat = Object.freeze({ version: VERSION });
+	const VERSION = '2.11.0';
+	w.SlimeCheat = Object.freeze({
+		version: VERSION,
+		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
+		history: (/** @type {'outfits' | 'worn'} */ kind, /** @type {number} */ n) => histGet(kind, n),
+		/** Whether the histories have finished loading (and moving out of localStorage). */
+		historyReady: () => historyReady,
+		/** Forgets a member's outfit or wear history. */
+		forget: (/** @type {'outfits' | 'worn'} */ kind, /** @type {number} */ n) => histForget(kind, n),
+	});
 
 	/** Where uploads go (tests point it at a local copy). */
 	const BASE = typeof w.SlimeCheatServer === 'string' ? w.SlimeCheatServer : 'https://song-upload.slimebeep-relay.workers.dev';
@@ -1643,11 +1651,277 @@
 		page('songs');
 	};
 
+	// ---- Where the outfit and wear histories are kept: IndexedDB. They used to be in localStorage, but every player
+	// met took 100-250 KB there, and localStorage (about 5 MB, shared with the game and every add-on) filled up: other
+	// add-ons then failed to save (WCE) or to start (ULTRAbc). IndexedDB has its own, much bigger room. The lists are
+	// read once into memory, so reading stays instant; each change is written back. Old localStorage lists are moved
+	// over and removed from localStorage. Only the HISTORY_PEOPLE players seen most recently are kept, per history.
+	// Without IndexedDB (some private windows) everything stays in localStorage, as before.
+	// Histories last for the player's session (owner's rule): while someone keeps showing up, their history stays; once
+	// they have been out of sight for longer than SESSION_GAP_MS, it is cleared. Short gaps (a reconnect, a quick room
+	// hop) don't end a session. Your own accounts' histories (every account that logged in here) are never cleared.
+	const SESSION_GAP_MS = Number(w.SlimeCheatSessionGapMs) || 30 * 60000;
+	const SELVES_KEY = 'slimecheat.selves';
+	const HISTORY_DB = 'slimecheat-history';
+	const HISTORY_STORE = 'lists';
+	const HISTORY_PEOPLE = 150;
+	/** @type {Record<'outfits' | 'worn', string>} the old localStorage key of each history, before the member number */
+	const HISTORY_OLD_KEY = { outfits: 'slimecheat.outfits.', worn: 'slimecheat.worn.' };
+	/** @type {Map<string, any[]>} 'outfits.<n>' / 'worn.<n>' -> the list, newest first */
+	const historyLists = new Map();
+	/** @type {Map<string, number>} 'outfits.<n>' / 'worn.<n>' -> when that player was last seen */
+	const historySeen = new Map();
+	/** @type {IDBDatabase | null} */
+	let historyDb = null;
+	/** Set once the lists are loaded (or IndexedDB turned out to be missing): until then nothing new is recorded. */
+	let historyReady = false;
+	/** Other tabs of this browser: a list written in one is updated in the others. */
+	const historyChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('slimecheat-history') : null;
+	/**
+	 * @param {'outfits' | 'worn'} kind
+	 * @param {number | undefined} n
+	 * @returns {any[]}
+	 */
+	const histGet = (kind, n) => {
+		if (historyDb) {
+			return historyLists.get(`${kind}.${n}`) || [];
+		}
+		try {
+			const list = JSON.parse(localStorage.getItem(HISTORY_OLD_KEY[kind] + n) || '[]');
+			return Array.isArray(list) ? list : [];
+		} catch (e) {
+			return [];
+		}
+	};
+	/** Forgets all but the HISTORY_PEOPLE players of a history seen most recently. @param {'outfits' | 'worn'} kind */
+	const histPrune = (kind) => {
+		const mine = [...historyLists.entries()].filter(([k]) => k.startsWith(`${kind}.`));
+		if (mine.length <= HISTORY_PEOPLE || !historyDb) {
+			return;
+		}
+		mine.sort((a, b) => (b[1][0]?.at || 0) - (a[1][0]?.at || 0));
+		const store = historyDb.transaction(HISTORY_STORE, 'readwrite').objectStore(HISTORY_STORE);
+		for (const [k] of mine.slice(HISTORY_PEOPLE)) {
+			historyLists.delete(k);
+			store.delete(k);
+		}
+	};
+	/**
+	 * Saves a member's history: `kept` is how many entries to keep at most.
+	 * @param {'outfits' | 'worn'} kind
+	 * @param {number} n
+	 * @param {any[]} list
+	 * @param {number} kept
+	 */
+	const histSet = (kind, n, list, kept) => {
+		if (historyDb) {
+			const key = `${kind}.${n}`;
+			const short = list.slice(0, kept);
+			historyLists.set(key, short);
+			historySeen.set(key, Date.now());
+			try {
+				historyDb.transaction(HISTORY_STORE, 'readwrite').objectStore(HISTORY_STORE).put({ key, list: short, seen: Date.now() });
+			} catch (e) {
+				console.warn('SlimeCheat history:', e);
+			}
+			historyChannel?.postMessage({ key, list: short });
+			histPrune(kind);
+			return;
+		}
+		// localStorage full: the oldest go first.
+		for (let keep = Math.min(list.length, kept); keep > 0; keep--) {
+			try {
+				localStorage.setItem(HISTORY_OLD_KEY[kind] + n, JSON.stringify(list.slice(0, keep)));
+				break;
+			} catch (e) {
+				/* too big: try with one fewer */
+			}
+		}
+	};
+	/**
+	 * @param {'outfits' | 'worn'} kind
+	 * @param {number} n
+	 */
+	const histForget = (kind, n) => {
+		const key = `${kind}.${n}`;
+		if (historyDb) {
+			historyLists.delete(key);
+			historySeen.delete(key);
+			try {
+				historyDb.transaction(HISTORY_STORE, 'readwrite').objectStore(HISTORY_STORE).delete(key);
+			} catch (e) {
+				console.warn('SlimeCheat history:', e);
+			}
+			historyChannel?.postMessage({ key, list: null });
+		}
+		try {
+			localStorage.removeItem(HISTORY_OLD_KEY[kind] + n);
+		} catch (e) {
+			/* nothing there */
+		}
+	};
+	if (historyChannel) {
+		historyChannel.onmessage = (ev) => {
+			const { key, list } = ev.data || {};
+			if (historyDb && typeof key === 'string' && list === null) {
+				historyLists.delete(key);
+				historySeen.delete(key);
+			} else if (historyDb && typeof key === 'string' && Array.isArray(list)) {
+				historyLists.set(key, list);
+				historySeen.set(key, Date.now());
+				const [kind, n] = key.split('.');
+				w.dispatchEvent(new CustomEvent(kind === 'worn' ? 'slimecheat-worn' : 'slimecheat-outfits', { detail: Number(n) }));
+			}
+		};
+	}
+	/** Member numbers of every account that logged in in this browser: their histories are kept. */
+	const selves = () => {
+		try {
+			const list = JSON.parse(localStorage.getItem(SELVES_KEY) || '[]');
+			return new Set(Array.isArray(list) ? list.map(Number) : []);
+		} catch (e) {
+			return new Set();
+		}
+	};
+	/**
+	 * Ends the sessions that are over: every player in sight now is marked as seen (and that is saved), and the
+	 * histories of players out of sight for longer than SESSION_GAP_MS are cleared. Your own accounts are kept.
+	 */
+	const histSweep = () => {
+		try {
+			const now = Date.now();
+			const me = player();
+			// Not logged in yet: who "you" are isn't known, so nothing is cleared.
+			if (!me) {
+				return;
+			}
+			const mine = selves();
+			if (!mine.has(me.MemberNumber)) {
+				mine.add(me.MemberNumber);
+				try {
+					localStorage.setItem(SELVES_KEY, JSON.stringify([...mine]));
+				} catch (e) {
+					/* storage full: kept for this session only */
+				}
+			}
+			const room = Array.isArray(w.ChatRoomCharacter) && w.ChatRoomCharacter.length ? w.ChatRoomCharacter : [me];
+			const here = new Set(room.map((/** @type {any} */ C) => C?.MemberNumber).filter(Boolean));
+			if (historyDb) {
+				const store = historyDb.transaction(HISTORY_STORE, 'readwrite').objectStore(HISTORY_STORE);
+				for (const [key, list] of [...historyLists.entries()]) {
+					const n = Number(key.split('.')[1]);
+					if (here.has(n)) {
+						historySeen.set(key, now);
+						store.put({ key, list, seen: now });
+					} else if (!mine.has(n) && now - (historySeen.get(key) || 0) > SESSION_GAP_MS) {
+						historyLists.delete(key);
+						historySeen.delete(key);
+						store.delete(key);
+						historyChannel?.postMessage({ key, list: null });
+					}
+				}
+				return;
+			}
+			// Without IndexedDB: the same rule on the localStorage lists, by their newest entry.
+			const keys = [];
+			for (let i = 0; i < localStorage.length; i++) {
+				keys.push(localStorage.key(i) || '');
+			}
+			for (const k of keys) {
+				const kind = /** @type {('outfits' | 'worn')[]} */ (['outfits', 'worn']).find((x) => k.startsWith(HISTORY_OLD_KEY[x]));
+				if (!kind) {
+					continue;
+				}
+				const n = Number(k.slice(HISTORY_OLD_KEY[kind].length));
+				if (here.has(n) || mine.has(n)) {
+					continue;
+				}
+				if (now - (histGet(kind, n)[0]?.at || 0) > SESSION_GAP_MS) {
+					localStorage.removeItem(k);
+				}
+			}
+		} catch (e) {
+			console.warn('SlimeCheat history sweep:', e);
+		}
+	};
+	/** Opens IndexedDB, reads every list, then moves any left in localStorage over. */
+	const histStart = async () => {
+		/** @type {IDBDatabase} */
+		const db = await new Promise((resolve, reject) => {
+			const req = indexedDB.open(HISTORY_DB, 1);
+			req.onupgradeneeded = () => req.result.createObjectStore(HISTORY_STORE, { keyPath: 'key' });
+			req.onsuccess = () => resolve(req.result);
+			req.onerror = () => reject(req.error);
+			req.onblocked = () => reject(new Error('IndexedDB blocked'));
+		});
+		/** @type {{ key: string, list: any[] }[]} */
+		const rows = await new Promise((resolve, reject) => {
+			const req = db.transaction(HISTORY_STORE).objectStore(HISTORY_STORE).getAll();
+			req.onsuccess = () => resolve(req.result || []);
+			req.onerror = () => reject(req.error);
+		});
+		for (const row of rows) {
+			if (row && typeof row.key === 'string' && Array.isArray(row.list)) {
+				historyLists.set(row.key, row.list);
+				historySeen.set(row.key, Number(row.seen) || row.list[0]?.at || 0);
+			}
+		}
+		// Move the old lists over; each leaves localStorage only once IndexedDB has it.
+		/** @type {[string, string, any[]][]} */
+		const old = [];
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i) || '';
+			for (const kind of /** @type {('outfits' | 'worn')[]} */ (['outfits', 'worn'])) {
+				if (k.startsWith(HISTORY_OLD_KEY[kind])) {
+					try {
+						const list = JSON.parse(localStorage.getItem(k) || '[]');
+						old.push([k, `${kind}.${k.slice(HISTORY_OLD_KEY[kind].length)}`, Array.isArray(list) ? list : []]);
+					} catch (e) {
+						old.push([k, '', []]);
+					}
+				}
+			}
+		}
+		if (old.length) {
+			await new Promise((resolve, reject) => {
+				const tx = db.transaction(HISTORY_STORE, 'readwrite');
+				const store = tx.objectStore(HISTORY_STORE);
+				for (const [, key, list] of old) {
+					// Another tab may have moved it already and added to it: the list with the newest entry wins.
+					if (key && (historyLists.get(key)?.[0]?.at || 0) < (list[0]?.at || 0)) {
+						historyLists.set(key, list);
+						historySeen.set(key, list[0]?.at || 0);
+						store.put({ key, list, seen: list[0]?.at || 0 });
+					}
+				}
+				tx.oncomplete = () => resolve(undefined);
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error);
+			});
+			for (const [k] of old) {
+				localStorage.removeItem(k);
+			}
+		}
+		historyDb = db;
+		histPrune('outfits');
+		histPrune('worn');
+	};
+	(typeof indexedDB === 'object' && indexedDB ? histStart() : Promise.reject(new Error('no IndexedDB')))
+		.catch((e) => {
+			historyDb = null;
+			console.warn('SlimeCheat: histories stay in localStorage:', e);
+		})
+		.finally(() => {
+			historyReady = true;
+			histSweep();
+			setInterval(histSweep, Math.min(60000, SESSION_GAP_MS));
+			w.dispatchEvent(new CustomEvent('slimecheat-outfits', { detail: player()?.MemberNumber }));
+		});
+
 	// ---- 🕘 Outfit history: every look each player in the room settles into (you too; a change that holds for one
 	// check, so dressing step by step isn't saved piece by piece) is kept in this browser, per member number, newest
 	// first. Faces and blushes are left out, so a new expression is never a new look. Restoring puts the look back,
 	// all of it or the parts you pick, with or without its locks.
-	const OUTFIT_KEY = 'slimecheat.outfits.';
 	const OUTFITS_KEPT = 20;
 	const OUTFIT_CHECK_MS = Number(w.SlimeCheatOutfitMs) || 3000;
 	/**
@@ -1655,14 +1929,7 @@
 	 * @param {number | undefined} n
 	 * @returns {{ at: number, look: string, items: number, locks: number, names: string[] }[]}
 	 */
-	const outfitsOf = (n) => {
-		try {
-			const list = JSON.parse(localStorage.getItem(OUTFIT_KEY + n) || '[]');
-			return Array.isArray(list) ? list : [];
-		} catch (e) {
-			return [];
-		}
-	};
+	const outfitsOf = (n) => histGet('outfits', n);
 	/**
 	 * One worn thing as the game saves it. Your own crafted items keep their whole craft: the game shares only part of
 	 * it (name, description, crafter, effects), which is all anyone else's has.
@@ -1700,6 +1967,9 @@
 	const lookSeen = new Map();
 	/** @param {any} C */
 	const recordOutfitOf = (C) => {
+		if (!historyReady) {
+			return;
+		}
 		const look = lookOf(C);
 		if (!look || look !== lookSeen.get(C.MemberNumber)) {
 			lookSeen.set(C.MemberNumber, look);
@@ -1717,21 +1987,19 @@
 			locks: typeof w.InventoryGetLock === 'function' ? items.filter((/** @type {any} */ it) => w.InventoryGetLock(it)).length : 0,
 			names: items.slice(0, 4).map((/** @type {any} */ it) => it.Craft?.Name || it.Asset.Description || it.Asset.Name),
 		});
-		// Storage full: the oldest go first.
-		for (let keep = Math.min(list.length, OUTFITS_KEPT); keep > 0; keep--) {
-			try {
-				localStorage.setItem(OUTFIT_KEY + C.MemberNumber, JSON.stringify(list.slice(0, keep)));
-				break;
-			} catch (e) {
-				/* too big: try with one fewer */
-			}
-		}
+		histSet('outfits', C.MemberNumber, list, OUTFITS_KEPT);
 		w.dispatchEvent(new CustomEvent('slimecheat-outfits', { detail: C.MemberNumber }));
 	};
+	/** The account the history sweep last ran for: a new login sweeps at once instead of within the minute. */
+	let sweptFor = 0;
 	const recordOutfit = () => {
 		const me = player();
 		if (!me) {
 			return;
+		}
+		if (historyReady && me.MemberNumber !== sweptFor) {
+			sweptFor = me.MemberNumber;
+			histSweep();
 		}
 		const room = Array.isArray(w.ChatRoomCharacter) && w.ChatRoomCharacter.length ? w.ChatRoomCharacter : [me];
 		for (const C of room) {
@@ -1853,7 +2121,6 @@
 	// as the game saves it (lock and its settings included), newest first, kept in this browser per member number.
 	// Like the outfit history, a change counts once it holds for one check. Body parts (hair, eyes, skin...) are in it
 	// when their style or colour changes: their old version is kept, to put back.
-	const WORN_KEY = 'slimecheat.worn.';
 	const WORN_KEPT = 40;
 	/** @type {Map<number, { stable: Record<string, { key: string, bundle: string, body: boolean }>, seen: string }>} */
 	const wornSeen = new Map();
@@ -1866,14 +2133,7 @@
 	 * @param {number} n
 	 * @returns {{ at: number, group: string, bundle: string, name: string, part: string, locked: boolean, changed: boolean, body?: boolean, items?: { at: number, group: string, bundle: string, name: string, part: string, locked: boolean, changed: boolean, body?: boolean }[] }[]}
 	 */
-	const wornList = (n) => {
-		try {
-			const list = JSON.parse(localStorage.getItem(WORN_KEY + n) || '[]');
-			return Array.isArray(list) ? list : [];
-		} catch (e) {
-			return [];
-		}
-	};
+	const wornList = (n) => histGet('worn', n);
 	/** @param {any} C */
 	const nickOf = (C) => (typeof w.CharacterNickname === 'function' ? w.CharacterNickname(C) : C.Nickname || C.Name || `#${C.MemberNumber}`);
 	/** Everyone whose wear is watched: the room, or just you outside one. */
@@ -1914,7 +2174,7 @@
 		return out;
 	};
 	const trackWorn = () => {
-		if (typeof w.ServerAppearanceBundle !== 'function') {
+		if (!historyReady || typeof w.ServerAppearanceBundle !== 'function') {
 			return;
 		}
 		for (const C of watched()) {
@@ -1965,15 +2225,7 @@
 					items: pieces,
 				});
 			}
-			// Storage full: the oldest go first.
-			for (let keep = Math.min(list.length, WORN_KEPT); keep > 0; keep--) {
-				try {
-					localStorage.setItem(WORN_KEY + C.MemberNumber, JSON.stringify(list.slice(0, keep)));
-					break;
-				} catch (e) {
-					/* too big: try with one fewer */
-				}
-			}
+			histSet('worn', C.MemberNumber, list, WORN_KEPT);
 			w.dispatchEvent(new CustomEvent('slimecheat-worn', { detail: C.MemberNumber }));
 		}
 	};
