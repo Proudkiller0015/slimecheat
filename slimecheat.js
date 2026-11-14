@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.11.0';
+	const VERSION = '2.12.0';
 	w.SlimeCheat = Object.freeze({
 		version: VERSION,
 		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
@@ -203,6 +203,15 @@
 				<label>Result<input class="sb-search" id="sc-dresult" placeholder="e.g. 6, or 6,6,5 for three dice" spellcheck="false"></label>
 				<div class="sc-line"><button class="sb-go" id="sc-droll">Roll</button><span class="sb-hint" id="sc-dsent"></span></div>
 				<span class="sb-hint">Shows in the room exactly like /dice. Leave Result empty for a fair roll.</span>
+				<div class="sb-row" style="display:block;cursor:default;margin-top:10px">
+					<div class="sb-name">⸸ Void dice <span class="sb-hint">(the Void Order's add-on, Oculus Nihili)</span></div>
+					<div class="sc-line" id="sc-vdice" style="margin-top:6px"><button class="sb-pill" data-vdie="4">d4</button><button class="sb-pill" data-vdie="6">d6</button><button class="sb-pill" data-vdie="8">d8</button><button class="sb-pill" data-vdie="10">d10</button><button class="sb-pill" data-vdie="12">d12</button><button class="sb-pill" data-vdie="20">d20</button><button class="sb-pill" data-vdie="100">d%</button></div>
+					<div class="sc-line"><b id="sc-vpool" style="flex:1">Pick dice</b><button class="sb-pill" id="sc-vclear">Clear</button></div>
+					<div class="sc-line"><label>Modifier<input class="sb-search" id="sc-vmod" value="0" inputmode="numeric"></label><label>Total<input class="sb-search" id="sc-vtotal" placeholder="any" inputmode="numeric"></label></div>
+					<label>Faces<input class="sb-search" id="sc-vfaces" placeholder="one per die, in the order shown, e.g. 20,6,5" spellcheck="false"></label>
+					<div class="sc-line"><button class="sb-go" id="sc-vroll">Post</button><span class="sb-hint" id="sc-vsent"></span></div>
+					<span class="sb-hint">Posts the line Oculus Nihili posts after a roll; its users see the dice fall on these faces. Set the total, or each face, or leave both empty for a fair roll.</span>
+				</div>
 			</div>
 			<div class="sc-page" id="sc-cheats" hidden>
 				<div class="sb-row" style="display:block;cursor:default">
@@ -834,6 +843,165 @@
 				.build();
 			ServerSend('ChatRoomChat', { Content: 'ActionDice', Type: 'Action', Dictionary: dictionary });
 			$('dsent').textContent = `Rolled ${count}D${sides}: ${count > 1 ? `${result} = ${total}` : total}`;
+		});
+
+		// ---- Void dice: the roll line of Oculus Nihili (the Void Order's add-on), built the way it builds it.
+		// The format is documented in void-order's void.js at ROLL_LINE; this copies its diceSpec, rollSum and rollText, and
+		// its readRollLine is what reads (and checks) every such line:
+		//   "rolls the Void dice: d20+2d6+3: 14 + 4 + 6 + 3 = 27"   ("d6: 3" for one die with no modifier)
+		// posted as an Emote. Dice are grouped by kind in the order first picked, the faces follow in that order, then the
+		// modifier (" + 3" or " - 2") and the total. Its limits: the dice below, 10 at once, a modifier of -99 to +99.
+		const VOID_DICE = [4, 6, 8, 10, 12, 20, 100];
+		const VOID_MAX_DICE = 10;
+		const VOID_MAX_MOD = 99;
+		const VOID_LINE = 'rolls the Void dice: ';
+		/** @type {number[]} The dice picked, in the order picked. */
+		let voidPool = [];
+		/**
+		 * Dice grouped by kind in the order first picked: [6, 4, 6] → [6, 6, 4].
+		 * @param {number[]} sides
+		 */
+		const voidGrouped = (sides) => [...new Set(sides)].flatMap((k) => sides.filter((x) => x === k));
+		/**
+		 * The dice in words, like void.js's diceSpec: "d20+2d6+3".
+		 * @param {number[]} sides
+		 * @param {number} mod
+		 */
+		const voidSpec = (sides, mod) => {
+			const kinds = [...new Set(sides)].map((k) => {
+				const n = sides.filter((x) => x === k).length;
+				return `${n > 1 ? n : ''}d${k}`;
+			});
+			return kinds.join('+') + voidMod(mod, '');
+		};
+		/**
+		 * A modifier as written after the dice ("+3", "-2") or after the faces (" + 3", " - 2"); nothing for 0.
+		 * @param {number} mod
+		 * @param {string} gap
+		 */
+		const voidMod = (mod, gap) => {
+			if (!mod) {
+				return '';
+			}
+			return mod > 0 ? `${gap}+${gap}${mod}` : `${gap}-${gap}${-mod}`;
+		};
+		/**
+		 * The line, like void.js's rollLine: `sides` and `faces` grouped, `total` their sum plus `mod`.
+		 * @param {number[]} sides
+		 * @param {number[]} faces
+		 * @param {number} mod
+		 */
+		const voidLine = (sides, faces, mod) => {
+			const total = faces.reduce((a, b) => a + b, mod);
+			const spec = voidSpec(sides, mod);
+			return sides.length === 1 && !mod
+				? `${VOID_LINE}${spec}: ${total}`
+				: `${VOID_LINE}${spec}: ${faces.join(' + ')}${voidMod(mod, ' ')} = ${total}`;
+		};
+		/**
+		 * Faces for `sides` that add up to `sum`, spread at random as far as the sum allows; null when no faces can.
+		 * @param {number[]} sides
+		 * @param {number} sum
+		 */
+		const voidFacesFor = (sides, sum) => {
+			const max = sides.reduce((a, b) => a + b, 0);
+			if (!Number.isInteger(sum) || sum < sides.length || sum > max) {
+				return null;
+			}
+			const faces = sides.map(() => 1);
+			let left = sum - sides.length;
+			const order = sides.map((_, i) => i).sort(() => Math.random() - 0.5);
+			let roomAfter = max - sides.length;
+			for (const i of order) {
+				roomAfter -= sides[i] - 1;
+				const least = Math.max(0, left - roomAfter);
+				const most = Math.min(sides[i] - 1, left);
+				const add = least + Math.floor(Math.random() * (most - least + 1));
+				faces[i] += add;
+				left -= add;
+			}
+			return faces;
+		};
+		const showVoidPool = () => {
+			const mod = Number(value('vmod')) || 0;
+			$('vpool').textContent = voidPool.length ? voidSpec(voidGrouped(voidPool), Number.isInteger(mod) ? mod : 0) : 'Pick dice';
+		};
+		$('vdice').addEventListener('click', (e) =>
+			guard(() => {
+				const b = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest('[data-vdie]'));
+				if (!b) {
+					return;
+				}
+				$('vsent').textContent = '';
+				if (voidPool.length >= VOID_MAX_DICE) {
+					fail(`Oculus Nihili rolls ${VOID_MAX_DICE} dice at most.`);
+					return;
+				}
+				fail('');
+				voidPool.push(Number(b.dataset.vdie));
+				showVoidPool();
+			}),
+		);
+		$('vmod').addEventListener('input', () => guard(showVoidPool));
+		onClick('vclear', () => {
+			voidPool = [];
+			$('vsent').textContent = '';
+			showVoidPool();
+		});
+		onClick('vroll', () => {
+			$('vsent').textContent = '';
+			const sides = voidGrouped(voidPool);
+			const mod = Number(value('vmod') || 0);
+			if (!sides.length || sides.some((x) => !VOID_DICE.includes(x))) {
+				fail('Pick the dice first.');
+				return;
+			}
+			if (!Number.isInteger(mod) || Math.abs(mod) > VOID_MAX_MOD) {
+				fail(`The modifier goes from -${VOID_MAX_MOD} to +${VOID_MAX_MOD}.`);
+				return;
+			}
+			/** @type {number[] | null} */
+			let faces = null;
+			if (value('vfaces')) {
+				faces = value('vfaces')
+					.split(/[\s,+]+/)
+					.filter(Boolean)
+					.map(Number);
+				if (faces.length !== sides.length) {
+					fail(
+						`Faces needs ${sides.length} number${sides.length > 1 ? 's' : ''}, one per die, in the order ${sides.map((x) => `d${x}`).join(', ')}.`,
+					);
+					return;
+				}
+				const bad = faces.findIndex((v, i) => !Number.isInteger(v) || v < 1 || v > sides[i]);
+				if (bad >= 0) {
+					fail(`Face ${bad + 1} is a d${sides[bad]}: from 1 to ${sides[bad]}.`);
+					return;
+				}
+			}
+			if (value('vtotal')) {
+				const total = Number(value('vtotal'));
+				const low = sides.length + mod;
+				const high = sides.reduce((a, b) => a + b, mod);
+				if (!Number.isInteger(total) || total < low || total > high) {
+					fail(`With these dice and modifier the total goes from ${low} to ${high}.`);
+					return;
+				}
+				if (faces && faces.reduce((a, b) => a + b, mod) !== total) {
+					fail('Those faces don’t add up to that total: clear one of the two.');
+					return;
+				}
+				faces = faces || voidFacesFor(sides, total - mod);
+			}
+			faces = faces || sides.map((x) => Math.floor(Math.random() * x) + 1);
+			if (typeof CurrentScreen === 'undefined' || CurrentScreen !== 'ChatRoom' || typeof ServerSend !== 'function') {
+				fail('Join a chat room first.');
+				return;
+			}
+			fail('');
+			const line = voidLine(sides, /** @type {number[]} */ (faces), mod);
+			ServerSend('ChatRoomChat', { Content: line, Type: 'Emote' });
+			$('vsent').textContent = `Posted: ${line.slice(VOID_LINE.length)}`;
 		});
 
 		// ---- Cheats (on yourself only)

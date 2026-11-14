@@ -6,7 +6,8 @@ const path = require('path');
 const crypto = require('crypto');
 const puppeteer = require('C:/Users/Sam_0/Documents/Project/bc-plushies/node_modules/puppeteer-core');
 
-const BASE = 'http://localhost:8788';
+// SC_BASE moves the worker when another dev server holds 8788.
+const BASE = process.env.SC_BASE || 'http://localhost:8788';
 const KEY = 'test-upload-key-0123456789';
 const GAME = 'https://www.bondageprojects.elementfx.com';
 const MB = 1024 * 1024;
@@ -820,7 +821,12 @@ async function browserChecks() {
 			});
 			const look = (/** @type {number} */ at) => JSON.stringify([{ at, look: '[]', items: 0, locks: 0, names: [] }]);
 			localStorage.setItem('slimecheat.outfits.31337', look(Date.now() - 60000));
-			localStorage.setItem('slimecheat.worn.31337', JSON.stringify([{ at: Date.now() - 60000, group: 'ItemArms', bundle: '{}', name: 'Cuffs', part: 'Arms', locked: false, changed: false }]));
+			localStorage.setItem(
+				'slimecheat.worn.31337',
+				JSON.stringify([
+					{ at: Date.now() - 60000, group: 'ItemArms', bundle: '{}', name: 'Cuffs', part: 'Arms', locked: false, changed: false },
+				]),
+			);
 			localStorage.setItem('slimecheat.outfits.40404', look(Date.now() - 2 * 3600000));
 			localStorage.setItem('slimecheat.outfits.50505', look(Date.now() - 2 * 3600000));
 			localStorage.setItem('slimecheat.selves', JSON.stringify([50505]));
@@ -1196,7 +1202,9 @@ async function browserChecks() {
 		await (await el('unlock')).click();
 		const burnt = await page.evaluate(() => /** @type {any} */ (window).calls.join(','));
 		check('Burn the lock unlocks only that slot, then saves my look and tells the room', burnt === 'unlock Cuffs,refresh,room', burnt);
-		await page.waitForFunction(() => /** @type {any} */ (window).SlimeCheat.historyReady() && (localStorage.getItem('slimecheat.selves') || '').includes('255659'));
+		await page.waitForFunction(
+			() => /** @type {any} */ (window).SlimeCheat.historyReady() && (localStorage.getItem('slimecheat.selves') || '').includes('255659'),
+		);
 		const moved = await page.evaluate(async () => {
 			const sc = /** @type {any} */ (window).SlimeCheat;
 			const rows = await new Promise((done) => {
@@ -1811,16 +1819,12 @@ async function browserChecks() {
 			});
 			w.Player.Appearance = [w.scItem('Shirt', 'Cloth'), w.scItem('Chains', 'ItemArms'), w.scItem('Short', 'HairFront')];
 		});
-		await page.waitForFunction(() =>
-			(/** @type {any} */ (window).SlimeCheat.history('outfits', 255659)[0]?.look || '').includes('Shirt'),
-		);
+		await page.waitForFunction(() => /** @type {any} */ (window.SlimeCheat.history('outfits', 255659)[0]?.look || '').includes('Shirt'));
 		await page.evaluate(() => {
 			const w = /** @type {any} */ (window);
 			w.Player.Appearance = [w.scItem('Dress', 'Cloth'), w.scItem('Rope', 'ItemLegs'), w.scItem('Long', 'HairFront')];
 		});
-		await page.waitForFunction(() =>
-			(/** @type {any} */ (window).SlimeCheat.history('outfits', 255659)[0]?.look || '').includes('Dress'),
-		);
+		await page.waitForFunction(() => /** @type {any} */ (window.SlimeCheat.history('outfits', 255659)[0]?.look || '').includes('Dress'));
 		await new Promise((done) => setTimeout(done, 300));
 		await inPanel((h) => {
 			const sel = h.shadowRoot.getElementById('sc-outfit');
@@ -2374,6 +2378,130 @@ async function browserChecks() {
 			m4aLink,
 			m4aPlay,
 		});
+		// Void dice: the line Oculus Nihili posts after a roll, to a chosen total or with chosen faces.
+		await tab('Dice');
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			w.voidSent = [];
+			w.CurrentScreen = 'ChatRoom';
+			w.ServerSend = (/** @type {string} */ m, /** @type {any} */ d) => w.voidSent.push({ m, ...d });
+		});
+		const vset = (/** @type {string} */ id, /** @type {string} */ v) =>
+			inPanel(
+				(h, [i, x]) => {
+					const e = /** @type {HTMLInputElement} */ (h.shadowRoot.getElementById(`sc-${i}`));
+					e.value = x;
+					e.dispatchEvent(new Event('input'));
+				},
+				[id, v],
+			);
+		const vdie = (/** @type {number} */ n) =>
+			inPanel((h, x) => /** @type {HTMLElement} */ (h.shadowRoot.querySelector(`#sc-vdice [data-vdie="${x}"]`)).click(), n);
+		const vpost = async () => {
+			await inPanel((h) => {
+				h.shadowRoot.getElementById('sc-err').textContent = '';
+				/** @type {HTMLElement} */ (h.shadowRoot.getElementById('sc-vroll')).click();
+			});
+			return page.evaluate(() => /** @type {any} */ (window).voidSent.pop() || null);
+		};
+		const vreset = async () => {
+			await (await el('vclear')).click();
+			await vset('vmod', '0');
+			await vset('vtotal', '');
+			await vset('vfaces', '');
+		};
+		/** @type {string[]} */
+		const voidLines = [];
+		await vdie(20);
+		await vdie(6);
+		await vdie(6);
+		await vset('vmod', '3');
+		check('Void dice: the dice picked show as Oculus Nihili names them', (await text('vpool')) === 'd20+2d6+3', await text('vpool'));
+		await vset('vtotal', '27');
+		let rigged = true;
+		for (let i = 0; i < 12; i++) {
+			const sent = await vpost();
+			const m = sent && /^rolls the Void dice: d20\+2d6\+3: (\d+) \+ (\d+) \+ (\d+) \+ 3 = 27$/.exec(sent.Content);
+			const [a, b, c] = m ? m.slice(1).map(Number) : [0, 0, 0];
+			if (!m || sent.Type !== 'Emote' || sent.m !== 'ChatRoomChat' || a > 20 || b > 6 || c > 6 || a + b + c !== 24) {
+				rigged = false;
+			}
+			if (sent) {
+				voidLines.push(sent.Content);
+			}
+		}
+		check('a chosen total posts faces that fit each die and add up to it, as an emote', rigged, voidLines.slice(-3));
+		await vset('vtotal', '');
+		await vset('vfaces', '14,4,6');
+		const exact = await vpost();
+		check(
+			'chosen faces post exactly',
+			!!exact && exact.Content === 'rolls the Void dice: d20+2d6+3: 14 + 4 + 6 + 3 = 27',
+			exact && exact.Content,
+		);
+		if (exact) {
+			voidLines.push(exact.Content);
+		}
+		await vset('vfaces', '21,4,6');
+		check('a face that doesn’t fit its die is refused', !(await vpost()) && /Face 1 is a d20/.test(await text('err')), await text('err'));
+		await vset('vfaces', '');
+		await vset('vtotal', '36');
+		check('a total out of reach is refused', !(await vpost()) && /from 6 to 35/.test(await text('err')), await text('err'));
+		await vreset();
+		for (const d of [6, 4, 6]) {
+			await vdie(d);
+		}
+		await vset('vmod', '-2');
+		await vset('vtotal', '3');
+		const mixed = await vpost();
+		const mm = mixed && /^rolls the Void dice: 2d6\+d4-2: (\d) \+ (\d) \+ (\d) - 2 = 3$/.exec(mixed.Content);
+		check(
+			'dice picked in any order are grouped as Oculus Nihili writes them, faces in that order',
+			!!mm && Number(mm[1]) + Number(mm[2]) + Number(mm[3]) === 5 && Number(mm[3]) <= 4,
+			mixed && mixed.Content,
+		);
+		if (mixed) {
+			voidLines.push(mixed.Content);
+		}
+		await vreset();
+		await vdie(6);
+		await vset('vtotal', '6');
+		const one = await vpost();
+		check('one die without a modifier reads "d6: 6"', !!one && one.Content === 'rolls the Void dice: d6: 6', one && one.Content);
+		if (one) {
+			voidLines.push(one.Content);
+		}
+		await vreset();
+		await vdie(100);
+		await vset('vmod', '-99');
+		const fair = await vpost();
+		check(
+			'left open it rolls fairly; d% is a d100',
+			!!fair && /^rolls the Void dice: d100-99: \d+ - 99 = -?\d+$/.test(fair.Content),
+			fair && fair.Content,
+		);
+		if (fair) {
+			voidLines.push(fair.Content);
+		}
+		await vreset();
+		for (let i = 0; i < 11; i++) {
+			await vdie(4);
+		}
+		check(
+			'Oculus Nihili’s limit of 10 dice holds',
+			(await text('vpool')) === '10d4' && /10 dice at most/.test(await text('err')),
+			await text('vpool'),
+		);
+		await vset('vmod', '100');
+		check('and its modifier limit', !(await vpost()) && /-99 to \+99/.test(await text('err')), await text('err'));
+		await vreset();
+		await vdie(8);
+		await page.evaluate(() => /** @type {any} */ (window.CurrentScreen = 'MainHall'));
+		check('outside a chat room nothing is posted', !(await vpost()) && /Join a chat room/.test(await text('err')));
+		await vreset();
+		if (process.env.VOID_LINES_OUT) {
+			fs.writeFileSync(process.env.VOID_LINES_OUT, JSON.stringify(voidLines));
+		}
 		check('every upload signed in with a SlimeBeep proof', (await page.evaluate(() => /** @type {any} */ (window).proofs)) > 5);
 		check('no page errors', errors.length === 0, errors);
 	} finally {
