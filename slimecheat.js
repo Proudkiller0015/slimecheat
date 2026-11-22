@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.13.0';
+	const VERSION = '2.13.1';
 	w.SlimeCheat = Object.freeze({
 		version: VERSION,
 		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
@@ -3561,8 +3561,35 @@
 			}
 		}
 	};
+	/** @type {any} The Player your own checks are hooked on through the mod SDK (the game makes it at login). */
+	let selfHookedOn = null;
 	/**
-	 * Wraps your own checks (once per method; the game makes a new Player at each login, other add-ons may swap one).
+	 * Hooks your own checks through the mod SDK, as BCX hooks its own. Replacing Player's methods directly
+	 * sets off BCX's compatibility checker, which flags every function changed outside the SDK.
+	 * @param {any} me
+	 */
+	const hookSelf = (me) => {
+		const mod = selfHookedOn ? null : modSdk();
+		if (!mod) {
+			return;
+		}
+		selfHookedOn = me;
+		for (const [name, answer] of Object.entries(GOD_SELF)) {
+			if (typeof me[name] !== 'function') {
+				continue;
+			}
+			try {
+				mod.hookFunction(`Player.${name}`, GOD_PRIORITY, (/** @type {any[]} */ args, /** @type {(args: any[]) => any} */ next) =>
+					godOn ? answer.apply(w.Player, args) : next(args),
+				);
+			} catch (e) {
+				console.warn(`SlimeCheat god mode: Player.${name}`, e);
+			}
+		}
+	};
+	/**
+	 * Wraps your own checks directly (once per method). Only when the game has no mod SDK, or Player is a new one
+	 * the SDK hooks don't sit on.
 	 * @param {any} me
 	 */
 	const wrapSelf = (me) => {
@@ -3615,7 +3642,10 @@
 			return;
 		}
 		hookGod();
-		wrapSelf(me);
+		hookSelf(me);
+		if (selfHookedOn !== me) {
+			wrapSelf(me);
+		}
 		wrapMapSight();
 	};
 	/**
