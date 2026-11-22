@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.12.0';
+	const VERSION = '2.13.0';
 	w.SlimeCheat = Object.freeze({
 		version: VERSION,
 		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
@@ -214,6 +214,16 @@
 				</div>
 			</div>
 			<div class="sc-page" id="sc-cheats" hidden>
+				<div class="sb-row" style="display:block;cursor:default">
+					<label class="sc-check" style="margin-top:0"><input type="checkbox" id="sc-god"> <b>👑 God mode</b></label>
+					<div class="sb-hint">Nothing holds you: restraints, cages, blindfolds, earplugs and gags don't touch you, the wardrobe opens and you can always leave. Zones other items cover are open on anyone, every activity shows whatever it needs (add-ons' too), and a leash can't drag you. On a map you walk through walls, see past them and reach anyone from afar. Other people's permissions and limits still count.</div>
+					<span class="sb-hint" id="sc-goddone"></span>
+				</div>
+				<div class="sb-row" style="display:block;cursor:default">
+					<div class="sb-name">🌀 Teleport</div>
+					<div class="sb-hint">In a map room: press, then click any square on the map to land there, walls or not.</div>
+					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-tp">Pick a square</button><span class="sb-hint" id="sc-tpdone"></span></div>
+				</div>
 				<div class="sb-row" style="display:block;cursor:default">
 					<div class="sb-name">🔥 Lock burner <span class="sb-hint">(yourself only)</span></div>
 					<div class="sc-line" style="margin-top:6px"><select class="sb-search" id="sc-part" style="flex:1"></select><button class="sb-pill" id="sc-parts" title="Reload the list">↻</button></div>
@@ -1163,6 +1173,29 @@
 			$('burnt').textContent = said;
 			fillParts();
 		});
+		// ---- 👑 God mode and 🌀 Teleport (both live outside the panel; these are their controls).
+		const godBox = /** @type {HTMLInputElement} */ ($('god'));
+		/** Says whether god mode is on, and what the game lacks for it. */
+		const showGod = () => {
+			godBox.checked = godOn;
+			const missing = godMissing.length ? ` ⚠ The game changed (${godMissing.join(', ')} is gone): that part is off.` : '';
+			$('goddone').textContent = godOn ? `👑 On.${missing}` : '';
+		};
+		godBox.addEventListener('change', () =>
+			guard(() => {
+				setGod(godBox.checked);
+				if (godBox.checked && typeof w.bcModSdk?.registerMod !== 'function') {
+					fail("⚠ The game's mod SDK is missing: god mode only frees your own checks.");
+				}
+				showGod();
+			}),
+		);
+		showGod();
+		tpSay = (text) => {
+			$('tpdone').textContent = text;
+			$('tp').textContent = tpPicking ? 'Cancel' : 'Pick a square';
+		};
+		onClick('tp', () => tpSay(tpToggle()));
 		// ---- Invisible: the game's Script item (group ItemScript) with every body group in its Hide list.
 		onClick('invis', () => {
 			const g = game();
@@ -3411,6 +3444,286 @@
 			e.stopImmediatePropagation();
 			typed.box.value = '';
 			typed.run();
+		},
+		true,
+	);
+
+	// ---- 👑 God mode (a switch on the 🔓 Cheats page, kept in this browser, off by default): nothing holds you.
+	// Your own checks (hands, feet, cages, wardrobe, blindness, deafness, slowness) answer "free" and every
+	// gate the game asks about blocked zones, activity requirements (the game's, LSCG's, Echo's: all go through
+	// ActivityCheckPrerequisite(s)), map distance, walls, leaving and leashes lets you through. The other
+	// player's settings still count: their item permission, activity limits and arousal settings, and the
+	// room's blocked categories. The hooks go in the first time it is switched on, through the game's mod SDK.
+	const GOD_KEY = 'slimecheat.god';
+	let godOn = false;
+	try {
+		godOn = localStorage.getItem(GOD_KEY) === '1';
+	} catch (e) {
+		/* no storage: off */
+	}
+	/** Runs before every other add-on's hook (BCX rules, LSCG states), so theirs can't hold you either. */
+	const GOD_PRIORITY = 1000;
+	/** Marks a method SlimeCheat has wrapped, so it is wrapped once. */
+	const GOD_MARK = Symbol('slimecheat.god');
+	/**
+	 * Whether a character is the player.
+	 * @param {any} C
+	 */
+	const isMe = (C) => !!C && (C === player() || !!C.IsPlayer?.());
+	/** @type {Record<string, (this: any, ...args: any[]) => unknown>} What your own checks answer in god mode. */
+	const GOD_SELF = {
+		CanInteract: () => true,
+		CanWalk: () => true,
+		CanTalk: () => true,
+		CanChangeOwnClothes: () => true,
+		CanChangeClothesOn: (C) => isMe(C) || (C?.MemberNumber != null && !!C.AllowItem),
+		IsRestrained: () => false,
+		IsEnclose: () => false,
+		GetBlindLevel: () => 0,
+		GetBlurLevel: () => 0,
+		GetDeafLevel: () => 0,
+		GetSlowLevel: () => 0,
+	};
+	/**
+	 * Runs fn with C not counting as enclosed (activities on someone in a cage or box).
+	 * @param {any} C
+	 * @param {() => unknown} fn
+	 */
+	const withoutEnclose = (C, fn) => {
+		if (!C || isMe(C) || typeof C.IsEnclose !== 'function') {
+			return fn();
+		}
+		const own = C.IsEnclose;
+		C.IsEnclose = () => false;
+		try {
+			return fn();
+		} finally {
+			C.IsEnclose = own;
+		}
+	};
+	/** Whether a map tile is inside the room's map. */
+	const onMap = (/** @type {number} */ x, /** @type {number} */ y) =>
+		x >= 0 && y >= 0 && x < w.ChatRoomMapViewWidth && y < w.ChatRoomMapViewHeight;
+	/** @type {Record<string, (args: any[], next: (args: any[]) => any) => unknown>} The game's gates and what they answer in god mode. */
+	const GOD_HOOKS = {
+		ActivityCheckPrerequisites: () => true,
+		ActivityCheckPrerequisite: () => true,
+		ActivityPossibleOnGroup: (args, next) => withoutEnclose(args[0], () => next(args)),
+		InventoryGroupIsBlockedForCharacter: () => false,
+		InventoryGroupIsAvailable: () => null,
+		InventoryGroupIsBlocked: () => false,
+		InventoryIsBlockedByDistance: () => false,
+		ChatRoomMapViewCharacterOnInteractionRange: () => true,
+		ChatRoomMapViewCharacterOnWhisperRange: () => true,
+		ChatRoomCanLeave: () => true,
+		// A leash: its holder leaving the room, or walking away on the map, doesn't pull you along.
+		ServerHandleLeashBeep: async () => undefined,
+		ChatRoomMapViewPullWithinLeashRange: () => undefined,
+		// Walls, objects and other players don't stop you; the map's edge does.
+		ChatRoomMapViewCanEnterTile: ([x, y]) => (onMap(x, y) ? w.ChatRoomMapViewBaseMovementSpeed : 0),
+		// What you say comes out ungagged (in the room and in your own dialog lines); stutter and baby talk stay.
+		SpeechTransformProcess: (args, next) =>
+			isMe(args[0]) && Array.isArray(args[2])
+				? next([args[0], args[1], args[2].filter((e) => e !== 'gagGarble' && e !== 'deafen'), ...args.slice(3)])
+				: next(args),
+	};
+	/** @type {any} SlimeCheat in the game's mod SDK, once registered. */
+	let sdkMod = null;
+	/** The mod SDK entry, registered the first time a cheat needs a hook; null when the game has no SDK. */
+	const modSdk = () => {
+		if (!sdkMod && typeof w.bcModSdk?.registerMod === 'function') {
+			sdkMod = w.bcModSdk.registerMod({
+				name: 'SlimeCheat',
+				fullName: 'SlimeCheat',
+				version: VERSION,
+				repository: 'https://github.com/Proudkiller0015/slimecheat',
+			});
+		}
+		return sdkMod;
+	};
+	/** The game functions god mode couldn't find (it works without them, minus what they do). */
+	let godMissing = /** @type {string[]} */ ([]);
+	/** Whether the god mode hooks are in. */
+	let godHooked = false;
+	/** Puts the god mode hooks in (once). */
+	const hookGod = () => {
+		const mod = godHooked ? null : modSdk();
+		if (!mod) {
+			return;
+		}
+		godHooked = true;
+		godMissing = Object.keys(GOD_HOOKS).filter((name) => typeof w[name] !== 'function');
+		for (const [name, answer] of Object.entries(GOD_HOOKS)) {
+			if (typeof w[name] === 'function') {
+				mod.hookFunction(name, GOD_PRIORITY, (/** @type {any[]} */ args, /** @type {(args: any[]) => any} */ next) =>
+					godOn ? answer(args, next) : next(args),
+				);
+			}
+		}
+	};
+	/**
+	 * Wraps your own checks (once per method; the game makes a new Player at each login, other add-ons may swap one).
+	 * @param {any} me
+	 */
+	const wrapSelf = (me) => {
+		for (const [name, answer] of Object.entries(GOD_SELF)) {
+			const own = me[name];
+			if (typeof own !== 'function' || own[GOD_MARK]) {
+				continue;
+			}
+			/** @type {any} */
+			const wrapped = function (/** @type {any} */ ...args) {
+				return godOn ? answer.apply(this, args) : own.apply(this, args);
+			};
+			wrapped[GOD_MARK] = true;
+			me[name] = wrapped;
+		}
+	};
+	/** Lets the map show every tile and let you hear every one: walls and distance hide nothing. */
+	const wrapMapSight = () => {
+		const map = w.MapManager?.Map;
+		const proto = map ? Object.getPrototypeOf(map) : null;
+		const own = proto?.updatePlayerPerception;
+		if (typeof own !== 'function' || own[GOD_MARK]) {
+			return;
+		}
+		/** @type {any} */
+		const wrapped = function (/** @type {any} */ ...args) {
+			const self = /** @type {any} */ (this);
+			const r = own.apply(self, args);
+			if (godOn && player()?.MapData && Array.isArray(self.sightMask) && Array.isArray(self.hearingMask)) {
+				for (let i = 0; i < w.ChatRoomMapViewWidth * w.ChatRoomMapViewHeight; i++) {
+					self.sightMask[i] = true;
+					self.hearingMask[i] = true;
+				}
+			}
+			return r;
+		};
+		wrapped[GOD_MARK] = true;
+		proto.updatePlayerPerception = wrapped;
+	};
+	/** Recomputes what the map shows (after god mode changes). */
+	const refreshMapSight = () => {
+		if (player()?.MapData && typeof w.MapManager?.Map?.updatePlayerPerception === 'function') {
+			w.MapManager.Map.updatePlayerPerception();
+		}
+	};
+	/** Keeps god mode's hooks and wraps in place while it is on. */
+	const keepGod = () => {
+		const me = player();
+		if (!godOn || !me) {
+			return;
+		}
+		hookGod();
+		wrapSelf(me);
+		wrapMapSight();
+	};
+	/**
+	 * Switches god mode on or off (remembered).
+	 * @param {boolean} on
+	 */
+	const setGod = (on) => {
+		godOn = on;
+		try {
+			localStorage.setItem(GOD_KEY, on ? '1' : '0');
+		} catch (e) {
+			/* no storage: on until the page reloads */
+		}
+		keepGod();
+		refreshMapSight();
+	};
+	setInterval(() => {
+		try {
+			keepGod();
+		} catch (e) {
+			console.warn('SlimeCheat god mode:', e);
+		}
+	}, 1000);
+
+	// ---- 🌀 Teleport (🔓 Cheats page): press, then click a square of a map room; you land there. A square follows
+	// the mouse over the map while picking; one jump per press, Esc cancels. Walls and the room's own teleport
+	// rules don't matter; the map's edge does. Moving goes through the game's Player.Position, which tells the room.
+	let tpPicking = false;
+	/** @type {(text: string) => void} Shows how picking went (the panel sets it). */
+	let tpSay = () => {};
+	/** Whether the tile maths the picker borrows from the game are there. */
+	const tpReady = () =>
+		['ChatRoomMapViewIsActive', 'ChatRoomMapViewPixelToTileCoordinates', 'ChatRoomMapViewClick', 'ChatRoomMapViewDrawGrid'].every(
+			(n) => typeof w[n] === 'function',
+		);
+	/** @type {Record<string, (args: any[], next: (args: any[]) => any) => unknown>} */
+	const TP_HOOKS = {
+		ChatRoomMapViewClick: (args, next) => {
+			const tile = w.MouseX <= w.ChatRoomMapViewSplitPosition ? w.ChatRoomMapViewPixelToTileCoordinates(w.MouseX, w.MouseY) : null;
+			if (!tile || !onMap(tile.X, tile.Y)) {
+				return next(args);
+			}
+			tpPicking = false;
+			if (typeof w.ChatRoomMapViewSetMapViewMovement === 'function') {
+				w.ChatRoomMapViewSetMapViewMovement(null);
+			}
+			player().Position = { X: tile.X, Y: tile.Y };
+			tpSay(`🌀 You're at ${tile.X}, ${tile.Y}.`);
+			return undefined;
+		},
+		// The square under the mouse, worked out the way ChatRoomMapViewPixelToTileCoordinates does.
+		ChatRoomMapViewDrawGrid: (args, next) => {
+			const r = next(args);
+			const [left, top, width, height] = args;
+			if (!w.MouseIn(left, top, width, height)) {
+				return r;
+			}
+			const size = height / (w.ChatRoomMapViewPerceptionRange * 2 + 1);
+			const gridLeft = left + (width - size) / 2;
+			const gridTop = top + (height - size) / 2;
+			const x = gridLeft + Math.floor((w.MouseX - gridLeft) / size) * size;
+			const y = gridTop + Math.floor((w.MouseY - gridTop) / size) * size;
+			w.DrawRect(x, y, size, size, '#00FFFF60');
+			w.DrawEmptyRect(x, y, size, size, '#00FFFF', 3);
+			return r;
+		},
+	};
+	let tpHooked = false;
+	/** Starts or stops picking a square; returns what to tell the user. */
+	const tpToggle = () => {
+		if (tpPicking) {
+			tpPicking = false;
+			return 'Cancelled.';
+		}
+		if (!tpReady()) {
+			return '⚠ The game changed (its map functions are gone): teleport is off until SlimeCheat is updated.';
+		}
+		const me = player();
+		if (w.CurrentScreen !== 'ChatRoom' || !w.ChatRoomMapViewIsActive() || !me?.MapData) {
+			return 'Open the map of a map room first.';
+		}
+		if (!('Position' in me)) {
+			return '⚠ The game changed (Player.Position is gone): teleport is off until SlimeCheat is updated.';
+		}
+		const mod = modSdk();
+		if (!mod) {
+			return "⚠ The game's mod SDK is missing: teleport can't hook the map.";
+		}
+		if (!tpHooked) {
+			tpHooked = true;
+			for (const [name, run] of Object.entries(TP_HOOKS)) {
+				mod.hookFunction(name, GOD_PRIORITY, (/** @type {any[]} */ args, /** @type {(args: any[]) => any} */ next) =>
+					tpPicking ? run(args, next) : next(args),
+				);
+			}
+		}
+		tpPicking = true;
+		return 'Click a square on the map (Esc cancels).';
+	};
+	document.addEventListener(
+		'keydown',
+		(e) => {
+			if (tpPicking && e.key === 'Escape') {
+				e.preventDefault();
+				e.stopImmediatePropagation();
+				tpPicking = false;
+				tpSay('Cancelled.');
+			}
 		},
 		true,
 	);

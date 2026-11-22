@@ -707,7 +707,7 @@ async function imageChecks() {
  */
 async function browserChecks() {
 	const script = fs.readFileSync(path.join(__dirname, 'slimecheat.js'), 'utf8');
-	check('the userscript hooks nothing in the game (no bcModSdk, no socket handlers)', !/\b(ServerSocket|bcModSdk)\b/.test(script));
+	check('the userscript adds no socket handlers (it hooks the game only for 👑 and 🌀, checked below)', !/\bServerSocket\b/.test(script));
 	const files = {
 		wav: path.join(tmp, 'song.wav'),
 		renamed: path.join(tmp, 'renamed.mp3'),
@@ -1369,6 +1369,85 @@ async function browserChecks() {
 			calls: /** @type {any} */ (window).calls.join(','),
 		}));
 		check('Visible again takes the Script item off', !shown2.on && /remove ItemScript,refresh,room$/.test(shown2.calls), shown2);
+		// God mode: nothing is hooked until it is switched on; then the game's gates go through the mod SDK and your
+		// own checks answer "free"; off, everything answers as the game does. (The real game is checked by hand on R134.)
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			/** @type {Record<string, (args: any[], next: (args: any[]) => any) => any>} */
+			w.godHooks = {};
+			w.godMods = [];
+			w.bcModSdk = {
+				registerMod: (/** @type {any} */ info) => {
+					w.godMods.push(info.name);
+					return {
+						hookFunction: (/** @type {string} */ name, /** @type {number} */ _p, /** @type {any} */ hook) => (w.godHooks[name] = hook),
+					};
+				},
+			};
+			for (const name of ['ActivityCheckPrerequisites', 'InventoryGroupIsBlocked', 'ChatRoomCanLeave', 'SpeechTransformProcess']) {
+				w[name] = () => 'game';
+			}
+			w.Player.CanInteract = () => false;
+			w.Player.GetBlindLevel = () => 3;
+		});
+		const beforeGod = await page.evaluate(() => /** @type {any} */ (window).godMods.length);
+		await (await el('god')).click();
+		await new Promise((r) => setTimeout(r, 1200));
+		const godOn = await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			const call = (/** @type {string} */ n, /** @type {any[]} */ args) => w.godHooks[n](args, () => 'game');
+			return {
+				mods: w.godMods.join(','),
+				hooked: Object.keys(w.godHooks).sort().join(','),
+				prereq: call('ActivityCheckPrerequisites', []),
+				blocked: call('InventoryGroupIsBlocked', []),
+				leave: call('ChatRoomCanLeave', []),
+				talk: w.godHooks.SpeechTransformProcess([w.Player, 'hi', ['babyTalk', 'gagGarble', 'stutter']], (/** @type {any[]} */ a) =>
+					a[2].join('+'),
+				),
+				interact: w.Player.CanInteract(),
+				blind: w.Player.GetBlindLevel(),
+				saved: localStorage.getItem('slimecheat.god'),
+			};
+		});
+		await (await el('god')).click();
+		const godOff = await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			return {
+				prereq: w.godHooks.ActivityCheckPrerequisites([], () => 'game'),
+				interact: w.Player.CanInteract(),
+				blind: w.Player.GetBlindLevel(),
+				saved: localStorage.getItem('slimecheat.god'),
+			};
+		});
+		check('👑 God mode hooks nothing until switched on', beforeGod === 0, beforeGod);
+		check(
+			'👑 on, SlimeCheat joins the mod SDK and the game gates let you through (prerequisites, blocked zones, leaving)',
+			godOn.mods === 'SlimeCheat' &&
+				/ActivityCheckPrerequisites/.test(godOn.hooked) &&
+				godOn.prereq === true &&
+				godOn.blocked === false &&
+				godOn.leave === true,
+			godOn,
+		);
+		check('👑 ...your own words go out ungagged, stutter and baby talk stay', godOn.talk === 'babyTalk+stutter', godOn.talk);
+		check(
+			'👑 ...your own checks answer free (hands, sight) and it is remembered',
+			godOn.interact === true && godOn.blind === 0 && godOn.saved === '1',
+			godOn,
+		);
+		check(
+			'👑 off again, every gate and check answers as the game does',
+			godOff.prereq === 'game' && godOff.interact === false && godOff.blind === 3 && godOff.saved === '0',
+			godOff,
+		);
+		// Teleport on a page without the game's map functions turns itself off with a note.
+		await (await el('tp')).click();
+		check(
+			'🌀 Teleport without the game’s map functions says it is off',
+			/teleport is off/.test(await text('tpdone')),
+			await text('tpdone'),
+		);
 		// Money: sets it and saves it with the game's own sync; refuses nonsense.
 		await page.evaluate(() => {
 			const w = /** @type {any} */ (window);
