@@ -69,7 +69,7 @@ owner's upload key. Anyone can play a song or load an image.
 | `GET /<key>.mp3` / `.m4a .jpg .png .webp` | the file (Range supported, open CORS)         | no  |
 
 - The key is a Worker secret, sent as `Authorization: Bearer <key>` and compared in constant time.
-- Upload calls answer CORS only for the game's sites (elementfx, bondageprojects.com, bondage-europe,
+- Upload calls answer CORS only for the game's sites (elementfx, bondageprojects.com, bondage-europe, bondageeurope,
   bondage-asia). Files are served with their type (`audio/mpeg`, `image/jpeg`, `image/png`,
   `image/webp`), `X-Content-Type-Options: nosniff`, `Access-Control-Allow-Origin: *` (so an image can be
   drawn on a canvas and still read back) and byte ranges, through the Worker rather than the

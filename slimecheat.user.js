@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SlimeCheat
 // @namespace    https://github.com/Proudkiller0015/slimecheat
-// @version      2.0.1
+// @version      2.0.2
 // @description  A hack panel inside SlimeBeep for Bondage Club: room music and background uploads, dice with the result you pick, and cheats on yourself. Needs SlimeBeep. Always runs the newest version.
 // @author       Proudkiller0015
 // @icon         https://raw.githubusercontent.com/Proudkiller0015/slimecheat/main/icon-64.png
@@ -14,7 +14,10 @@
 // @match        https://www.bondageprojects.com/*
 // @match        https://www.bondage-europe.com/*
 // @match        https://bondage-europe.com/*
+// @match        https://www.bondageeurope.com/*
+// @match        https://bondageeurope.com/*
 // @match        https://www.bondage-asia.com/*
+// @match        https://bondage-asia.com/*
 // @match        http://localhost:8130/*
 // @run-at       document-end
 // @grant        none
