@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.13.1';
+	const VERSION = '2.14.0';
 	w.SlimeCheat = Object.freeze({
 		version: VERSION,
 		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
@@ -75,6 +75,8 @@
 	// description says "fireproof" never burn, nor do their locks (the lock burner, !burn, !burnlock, !burnlocks,
 	// !burnall on yourself). Burning someone else ignores it.
 	const FIREPROOF_KEY = 'slimecheat.fireproof';
+	/** 🧸 Held saves (a list, kept in this browser). */
+	const HELD_KEY = 'slimecheat.held';
 	const fireproofOn = () => {
 		try {
 			return localStorage.getItem(FIREPROOF_KEY) === '1';
@@ -179,12 +181,14 @@
 			.sc-parts label.sc-check { margin-top: 2px; }
 			.sc-worn .sb-main { flex: 1; min-width: 0; }
 			.sc-worn .sb-main b { overflow-wrap: anywhere; }
+			.sc-held .sb-main { flex: 1; min-width: 0; }
+			.sc-held .sb-sub { white-space: normal; overflow: visible; text-overflow: clip; }
 		</style>
 		<div id="sc-root">
 			<div class="sc-tabs" id="sc-tabs">
 				<button class="sb-pill" data-page="songs">🎵 Songs</button><button class="sb-pill" data-page="images">🖼 Images</button>
 				<button class="sb-pill" data-page="files">📁 My files</button><button class="sb-pill" data-page="dice">🎲 Dice</button>
-				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
+				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="held">🧸 Held</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
 			</div>
 			<div class="sc-page" id="sc-upload">
 				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 or m4a, up to 500 MB</span></div>
@@ -257,6 +261,15 @@
 					<div class="sb-hint">Adds every item in the game to your own inventory (saved to your account).</div>
 					<div class="sc-line" style="margin-top:6px"><button class="sb-go" id="sc-allitems">Unlock all items</button><span class="sb-hint" id="sc-itemsdone"></span></div>
 				</div>
+			</div>
+			<div class="sc-page" id="sc-held" hidden>
+				<div class="sb-hint">Saves what you hold (in your hands or as a misc item) exactly as it is: crafted name, description, crafter, colours and settings. Hold it again whenever you like. Kept in this browser.</div>
+				<div class="sc-line"><select class="sb-search" id="sc-heldslot"><option value="ItemHandheld">✋ In hands</option><option value="ItemMisc">📦 Misc</option></select><input class="sb-search" id="sc-heldname" placeholder="Name (optional)" style="flex:1"></div>
+				<div class="sc-line"><button class="sb-go" id="sc-heldsave">💾 Save mine</button><button class="sb-pill" id="sc-heldtheirs" hidden></button></div>
+				<span class="sb-hint" id="sc-helddone"></span>
+				<div class="sc-line"><button class="sb-pill" id="sc-heldexport">⬇ Export</button><button class="sb-pill" id="sc-heldimport">⬆ Import</button><button class="sb-pill" id="sc-heldnft" hidden></button></div>
+				<input type="file" id="sc-heldfile" accept=".json,application/json" hidden>
+				<div id="sc-heldlist"></div>
 			</div>
 			<div class="sc-page" id="sc-wear" hidden>
 				<div class="sc-line"><div class="sb-name" id="sc-wearhead" style="flex:1"></div><button class="sb-pill" id="sc-wearclose" title="Close">✕</button></div>
@@ -354,7 +367,7 @@
 				$('done').hidden = true;
 			}
 			$('upload').hidden = !upload;
-			for (const p of ['files', 'dice', 'cheats', 'settings', 'wear', 'locks', 'hack']) {
+			for (const p of ['files', 'dice', 'cheats', 'held', 'settings', 'wear', 'locks', 'hack']) {
 				$(p).hidden = name !== p;
 			}
 			for (const tab of root.querySelectorAll('#sc-tabs [data-page]')) {
@@ -367,6 +380,8 @@
 			} else if (name === 'cheats') {
 				guard(fillParts);
 				guard(showMoney);
+			} else if (name === 'held') {
+				guard(showHeld);
 			}
 		};
 		$('tabs').addEventListener('click', (e) => {
@@ -1321,6 +1336,329 @@
 					: ''
 			}`;
 		});
+
+		// ---- 🧸 Held: saves of a held item (ItemHandheld or ItemMisc) as it was, craft and settings included, worn again
+		// on yourself. Ours, written for SlimeCheat; it reads NFT (Nest of Fluffy Treasures) saves and exports so a
+		// player's old saves come along, but shares no code with it.
+		/**
+		 * @typedef {{ id: string, name: string, group: string, asset: string, color?: any, difficulty?: number,
+		 *   property?: any, craft?: any, saved: number, from?: string }} HeldSave
+		 */
+		/** NFT's own list in this browser: { key: { label, snap: { Asset: { Group, Name }, Color, Difficulty, Property, Craft, _savedAt } } }. */
+		const NFT_KEY = 'BC_ItemSaver_HeldV1';
+		/** @param {any} v */
+		const clone = (v) => (v === undefined || v === null ? undefined : JSON.parse(JSON.stringify(v)));
+		/** @returns {HeldSave[]} */
+		const heldList = () => {
+			try {
+				const list = JSON.parse(localStorage.getItem(HELD_KEY) || '[]');
+				return Array.isArray(list) ? list.filter((s) => s && typeof s.group === 'string' && typeof s.asset === 'string') : [];
+			} catch {
+				return [];
+			}
+		};
+		/** @param {HeldSave[]} list */
+		const heldStore = (list) => localStorage.setItem(HELD_KEY, JSON.stringify(list));
+		/** What makes two saves the same item (so an import doesn't add copies). @param {HeldSave} s */
+		const heldSame = (s) => JSON.stringify([s.name, s.group, s.asset, s.color, s.difficulty, s.property, s.craft]);
+		/**
+		 * Saves from an export: ours ({ slimecheat: 'held', items }) or NFT's ({ key: { label, snap } }).
+		 * @param {any} data
+		 * @returns {HeldSave[]}
+		 */
+		const heldParse = (data) => {
+			if (data && data.slimecheat === 'held' && Array.isArray(data.items)) {
+				return data.items.filter((/** @type {any} */ s) => s && typeof s.group === 'string' && typeof s.asset === 'string');
+			}
+			if (!data || typeof data !== 'object' || Array.isArray(data)) {
+				return [];
+			}
+			/** @type {HeldSave[]} */
+			const out = [];
+			for (const [key, entry] of Object.entries(data)) {
+				const snap = entry && entry.snap;
+				const group = snap && snap.Asset && snap.Asset.Group;
+				const asset = snap && snap.Asset && snap.Asset.Name;
+				if (typeof group !== 'string' || typeof asset !== 'string') {
+					continue;
+				}
+				out.push({
+					id: `nft-${key}`,
+					name: String(entry.label || (snap.Craft && snap.Craft.Name) || asset),
+					group,
+					asset,
+					color: clone(snap.Color),
+					difficulty: typeof snap.Difficulty === 'number' ? snap.Difficulty : undefined,
+					property: clone(snap.Property),
+					craft: clone(snap.Craft),
+					saved: Date.parse(snap._savedAt) || Date.now(),
+				});
+			}
+			return out;
+		};
+		/**
+		 * Adds saves the list doesn't have yet; says how many were new.
+		 * @param {HeldSave[]} incoming
+		 */
+		const heldAdd = (incoming) => {
+			const list = heldList();
+			const have = new Set(list.map(heldSame));
+			let added = 0;
+			for (const s of incoming) {
+				if (have.has(heldSame(s))) {
+					continue;
+				}
+				have.add(heldSame(s));
+				list.push({ ...s, id: list.some((o) => o.id === s.id) ? `${s.id}-${added}` : s.id });
+				added++;
+			}
+			heldStore(list);
+			return added;
+		};
+		/** The player open in the game, when it isn't you. */
+		const heldOther = () => {
+			const C = w.CurrentCharacter;
+			const me = player();
+			return C && me && C !== me && C.MemberNumber !== me.MemberNumber && Array.isArray(C.Appearance) ? C : null;
+		};
+		/** The slot picked on the page. */
+		const heldSlot = () => /** @type {HTMLSelectElement} */ ($('heldslot')).value || 'ItemHandheld';
+		/** An item's name as the game shows it. @param {string} group @param {string} asset */
+		const heldAssetName = (group, asset) => {
+			const A = typeof w.AssetGet === 'function' ? w.AssetGet('Female3DCG', group, asset) : null;
+			return (A && A.Description) || asset;
+		};
+		/**
+		 * Saves what C holds in the picked slot.
+		 * @param {any} C
+		 */
+		const heldSave = (C) => {
+			const g = game();
+			if (!g) {
+				return;
+			}
+			const slot = heldSlot();
+			const item = g.InventoryGet(C, slot);
+			const mine = C === player();
+			if (!item || !item.Asset) {
+				const who = mine ? 'You hold' : `${C.Nickname || C.Name} holds`;
+				const hands = mine ? 'in your hands' : 'in their hands';
+				$('helddone').textContent = `${who} nothing ${slot === 'ItemMisc' ? 'as a misc item' : hands}.`;
+				return;
+			}
+			const typed = value('heldname');
+			/** @type {HeldSave} */
+			const s = {
+				id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+				name: typed || (item.Craft && item.Craft.Name) || heldAssetName(slot, item.Asset.Name),
+				group: slot,
+				asset: item.Asset.Name,
+				color: clone(item.Color),
+				difficulty: typeof item.Difficulty === 'number' ? item.Difficulty : undefined,
+				property: clone(item.Property),
+				craft: clone(item.Craft),
+				saved: Date.now(),
+				from: mine ? undefined : `${C.Nickname || C.Name} #${C.MemberNumber}`,
+			};
+			const list = heldList();
+			list.push(s);
+			heldStore(list);
+			/** @type {HTMLInputElement} */ ($('heldname')).value = '';
+			$('helddone').textContent = `💾 Saved "${s.name}".`;
+			showHeld();
+		};
+		/**
+		 * Puts a save on yourself, in its slot, as it was saved.
+		 * @param {HeldSave} s
+		 */
+		const heldHold = (s) => {
+			const g = game();
+			if (!g) {
+				return;
+			}
+			if (typeof w.InventoryWear !== 'function' || typeof w.AssetGet !== 'function') {
+				fail('⚠ The game changed (InventoryWear or AssetGet is gone): this cheat is off until SlimeCheat is updated.');
+				return;
+			}
+			const me = player();
+			if (!w.AssetGet(me.AssetFamily, s.group, s.asset)) {
+				$('helddone').textContent = `"${s.name}" (${s.asset}) isn't in the game: the add-on it comes from may be off.`;
+				return;
+			}
+			w.InventoryWear(
+				me,
+				s.asset,
+				s.group,
+				clone(s.color) || 'Default',
+				s.difficulty ?? null,
+				me.MemberNumber,
+				clone(s.craft) || null,
+				false,
+			);
+			const item = g.InventoryGet(me, s.group);
+			if (!item || !item.Asset || item.Asset.Name !== s.asset) {
+				fail(`⚠ The game wouldn't put "${s.name}" on you.`);
+				return;
+			}
+			if (s.color !== undefined) {
+				item.Color = clone(s.color);
+			}
+			if (typeof s.difficulty === 'number') {
+				item.Difficulty = s.difficulty;
+			}
+			item.Property = clone(s.property) || {};
+			if (s.craft !== undefined) {
+				item.Craft = clone(s.craft);
+			} else {
+				delete item.Craft;
+			}
+			pushLook(g);
+			$('helddone').textContent = `🧸 You hold "${s.name}".`;
+		};
+		/** Fills the page: the save buttons and the list, newest first. */
+		const showHeld = () => {
+			const other = heldOther();
+			$('heldtheirs').hidden = !other;
+			$('heldtheirs').textContent = other ? `💾 Save ${other.Nickname || other.Name}'s` : '';
+			/** @type {Record<string, unknown>} */
+			let nft = {};
+			try {
+				nft = JSON.parse(localStorage.getItem(NFT_KEY) || '{}') || {};
+			} catch {
+				nft = {};
+			}
+			const have = new Set(heldList().map(heldSame));
+			const nftCount = heldParse(nft).filter((s) => !have.has(heldSame(s))).length;
+			$('heldnft').hidden = !nftCount;
+			$('heldnft').textContent = `🪺 Bring in NFT saves (${nftCount} new)`;
+			const box = $('heldlist');
+			box.replaceChildren();
+			const list = heldList().sort((a, b) => b.saved - a.saved);
+			if (!list.length) {
+				box.append(make('div', 'sb-hint', 'No saves yet.'));
+				return;
+			}
+			for (const s of list) {
+				const row = make('div', 'sb-row sc-file sc-held');
+				row.style.cursor = 'default';
+				const pic = /** @type {HTMLImageElement} */ (make('img'));
+				const A = typeof w.AssetGet === 'function' ? w.AssetGet('Female3DCG', s.group, s.asset) : null;
+				pic.src =
+					A && typeof w.AssetGetPreviewPath === 'function'
+						? `${w.AssetGetPreviewPath(A)}/${s.asset}.png`
+						: `Assets/Female3DCG/${s.group}/Preview/${s.asset}.png`;
+				pic.alt = '';
+				pic.style.objectFit = 'contain';
+				pic.addEventListener('error', () => {
+					pic.style.visibility = 'hidden';
+				});
+				const craft = s.craft || {};
+				const number = craft.MemberNumber ? `#${craft.MemberNumber}` : '';
+				const crafter = [craft.MemberName, number].filter(Boolean).join(' ');
+				const bits = [
+					s.group === 'ItemMisc' ? '📦 misc' : '✋ hands',
+					heldAssetName(s.group, s.asset),
+					crafter ? `crafted by ${crafter}` : '',
+					s.from ? `from ${s.from}` : '',
+					new Date(s.saved).toLocaleDateString(),
+				].filter(Boolean);
+				const info = make('div', 'sb-main');
+				info.append(make('b', 'sb-name', s.name), make('div', 'sb-sub', bits.join(' · ')));
+				if (craft.Description) {
+					info.append(make('div', 'sb-hint', String(craft.Description)));
+				}
+				const hold = make('button', 'sb-go', 'Hold');
+				hold.addEventListener('click', () => guard(() => heldHold(s)));
+				const del = /** @type {HTMLButtonElement} */ (make('button', 'sb-pill', '✕'));
+				del.title = 'Delete';
+				let sure = 0;
+				del.addEventListener('click', () =>
+					guard(() => {
+						if (!sure) {
+							del.textContent = 'Sure?';
+							del.classList.add('sc-sure');
+							sure = setTimeout(() => {
+								sure = 0;
+								del.textContent = '✕';
+								del.classList.remove('sc-sure');
+							}, 4000);
+							return;
+						}
+						clearTimeout(sure);
+						heldStore(heldList().filter((o) => o.id !== s.id));
+						$('helddone').textContent = `Deleted "${s.name}".`;
+						showHeld();
+					}),
+				);
+				const buttons = make('div', 'sc-line');
+				buttons.append(hold, del);
+				row.append(pic, info, buttons);
+				box.append(row);
+			}
+		};
+		onClick('heldsave', () => {
+			const me = player();
+			if (!me) {
+				fail('Log in first.');
+				return;
+			}
+			heldSave(me);
+		});
+		onClick('heldtheirs', () => {
+			const other = heldOther();
+			if (!other) {
+				$('helddone').textContent = 'Open a player in the game first.';
+				showHeld();
+				return;
+			}
+			heldSave(other);
+		});
+		onClick('heldnft', () => {
+			const added = heldAdd(heldParse(JSON.parse(localStorage.getItem(NFT_KEY) || '{}')));
+			$('helddone').textContent = added ? `🪺 Brought in ${added} NFT save${added === 1 ? '' : 's'}.` : 'Every NFT save is here already.';
+			showHeld();
+		});
+		onClick('heldexport', () => {
+			const list = heldList();
+			if (!list.length) {
+				$('helddone').textContent = 'Nothing to export yet.';
+				return;
+			}
+			const a = document.createElement('a');
+			a.href = URL.createObjectURL(
+				new Blob([JSON.stringify({ slimecheat: 'held', version: 1, items: list }, null, 2)], { type: 'application/json' }),
+			);
+			a.download = 'SlimeCheat held items.json';
+			a.click();
+			setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+			$('helddone').textContent = `⬇ Exported ${list.length} save${list.length === 1 ? '' : 's'}.`;
+		});
+		const heldFile = /** @type {HTMLInputElement} */ ($('heldfile'));
+		onClick('heldimport', () => heldFile.click());
+		heldFile.addEventListener('change', () =>
+			guard(async () => {
+				const file = heldFile.files && heldFile.files[0];
+				heldFile.value = '';
+				if (!file) {
+					return;
+				}
+				let data;
+				try {
+					data = JSON.parse(await file.text());
+				} catch {
+					$('helddone').textContent = "That file isn't a saves file.";
+					return;
+				}
+				const incoming = heldParse(data);
+				if (!incoming.length) {
+					$('helddone').textContent = 'No saves in that file (SlimeCheat and NFT exports both work).';
+					return;
+				}
+				const added = heldAdd(incoming);
+				$('helddone').textContent = `⬆ ${added} new save${added === 1 ? '' : 's'} (${incoming.length - added} already here).`;
+				showHeld();
+			}),
+		);
 
 		// ---- 🕘 Outfit history (recorded by recordOutfit, below the panel): yours, or the player !listoutfit opened.
 		const OUTFIT_LOCKS_KEY = 'slimecheat.outfitLocks';

@@ -873,8 +873,8 @@ async function browserChecks() {
 		check('the panel opens on Songs with Upload song', (await visible('pick')) && (await text('pick')) === '🎵 Upload song');
 		const tabs = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-tabs [data-page]')].map((t) => t.textContent).join(' | '));
 		check(
-			'the pages are Songs | Images | My files | Dice | Cheats | ⚙ Settings',
-			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | ⚙',
+			'the pages are Songs | Images | My files | Dice | Cheats | Held | ⚙ Settings',
+			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | 🧸 Held | ⚙',
 			tabs,
 		);
 		check(
@@ -1369,6 +1369,87 @@ async function browserChecks() {
 			calls: /** @type {any} */ (window).calls.join(','),
 		}));
 		check('Visible again takes the Script item off', !shown2.on && /remove ItemScript,refresh,room$/.test(shown2.calls), shown2);
+		// 🧸 Held: saves what you hold as it is (craft and settings too), holds it again, brings in NFT's saves.
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			const held = {
+				Asset: { Name: 'Plushie', Description: 'Plushie', Group: { Name: 'ItemHandheld', Category: 'Item', Family: 'Female3DCG' } },
+				Color: ['#123456'],
+				Difficulty: 4,
+				Property: { TypeRecord: { DenOfSin: 2 } },
+				Craft: { Name: 'Sir Fluff', Description: 'Soft', MemberName: 'Crafty', MemberNumber: 999 },
+			};
+			w.Player.Appearance.push(held);
+			w.AssetGet = (/** @type {string} */ _f, /** @type {string} */ g, /** @type {string} */ n) =>
+				g === 'ItemHandheld' && n === 'Plushie' ? held.Asset : null;
+			w.InventoryWear = (/** @type {any} */ C, /** @type {string} */ name, /** @type {string} */ group, /** @type {any} */ color) => {
+				C.Appearance = C.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== group);
+				C.Appearance.push({ Asset: held.Asset, Color: color, Property: {} });
+				w.calls.push(`wear ${name}`);
+			};
+			localStorage.setItem(
+				'BC_ItemSaver_HeldV1',
+				JSON.stringify({
+					a: {
+						label: 'Old bunny',
+						snap: { Asset: { Group: 'ItemHandheld', Name: 'Plushie' }, Color: ['#ff0000'], _savedAt: '2026-11-01T10:00:00Z' },
+					},
+					b: { label: 'Gone', snap: { Asset: { Group: 'ItemHandheld', Name: 'NoSuchThing' } } },
+				}),
+			);
+			localStorage.removeItem('slimecheat.held');
+		});
+		await tab('Held');
+		const nftOffer = await text('heldnft');
+		await (await el('heldsave')).click();
+		const heldSaved = await text('helddone');
+		await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			w.Player.Appearance = w.Player.Appearance.filter((/** @type {any} */ i) => i.Asset.Group.Name !== 'ItemHandheld');
+			w.calls = [];
+		});
+		await inPanel((h) => /** @type {HTMLElement} */ (h.shadowRoot.querySelector('#sc-heldlist .sb-go')).click());
+		const heldBack = await page.evaluate(() => {
+			const w = /** @type {any} */ (window);
+			const i = w.Player.Appearance.find((/** @type {any} */ x) => x.Asset.Group.Name === 'ItemHandheld');
+			return { item: i && JSON.stringify([i.Color, i.Difficulty, i.Property, i.Craft]), calls: w.calls.join(',') };
+		});
+		check(
+			'🧸 Held saves the held item and holds it again exactly as it was (colour, difficulty, settings, craft), then tells the room',
+			/Saved "Sir Fluff"/.test(heldSaved) &&
+				heldBack.item ===
+					JSON.stringify([
+						['#123456'],
+						4,
+						{ TypeRecord: { DenOfSin: 2 } },
+						{ Name: 'Sir Fluff', Description: 'Soft', MemberName: 'Crafty', MemberNumber: 999 },
+					]) &&
+				heldBack.calls === 'wear Plushie,refresh,room',
+			[heldSaved, heldBack],
+		);
+		await (await el('heldnft')).click();
+		const nftIn = { text: await text('helddone'), offerHidden: !(await visible('heldnft')) };
+		await (await el('heldnft')).click().catch(() => {});
+		const heldRows = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-heldlist .sb-name')].map((b) => b.textContent).join('|'));
+		check(
+			"🧸 Held offers NFT's saves in this browser once, brings them in, and adds no copies",
+			nftOffer === '🪺 Bring in NFT saves (2 new)' &&
+				nftIn.text === '🪺 Brought in 2 NFT saves.' &&
+				nftIn.offerHidden &&
+				heldRows.split('|').length === 3,
+			[nftOffer, nftIn, heldRows],
+		);
+		await inPanel((h) => {
+			const row = [...h.shadowRoot.querySelectorAll('#sc-heldlist .sb-row')].find((r) => r.textContent.includes('Gone'));
+			/** @type {HTMLElement} */ (row.querySelector('.sb-go')).click();
+		});
+		const missing = await text('helddone');
+		check(
+			"🧸 Held says when a save's item isn't in the game (its add-on is off) and wears nothing",
+			/isn't in the game/.test(missing),
+			missing,
+		);
+		await tab('Cheats');
 		// God mode: nothing is hooked until it is switched on; then the game's gates go through the mod SDK and your
 		// own checks answer "free"; off, everything answers as the game does. (The real game is checked by hand on R134.)
 		await page.evaluate(() => {
@@ -1405,8 +1486,9 @@ async function browserChecks() {
 				talk: w.godHooks.SpeechTransformProcess([w.Player, 'hi', ['babyTalk', 'gagGarble', 'stutter']], (/** @type {any[]} */ a) =>
 					a[2].join('+'),
 				),
-				interact: w.Player.CanInteract(),
-				blind: w.Player.GetBlindLevel(),
+				// Your own checks go through the mod SDK too (the stand-in SDK records hooks without installing them).
+				interact: w.godHooks['Player.CanInteract']([], () => w.Player.CanInteract()),
+				blind: w.godHooks['Player.GetBlindLevel']([], () => w.Player.GetBlindLevel()),
 				saved: localStorage.getItem('slimecheat.god'),
 			};
 		});
@@ -1415,8 +1497,8 @@ async function browserChecks() {
 			const w = /** @type {any} */ (window);
 			return {
 				prereq: w.godHooks.ActivityCheckPrerequisites([], () => 'game'),
-				interact: w.Player.CanInteract(),
-				blind: w.Player.GetBlindLevel(),
+				interact: w.godHooks['Player.CanInteract']([], () => w.Player.CanInteract()),
+				blind: w.godHooks['Player.GetBlindLevel']([], () => w.Player.GetBlindLevel()),
 				saved: localStorage.getItem('slimecheat.god'),
 			};
 		});

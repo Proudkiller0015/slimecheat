@@ -33,6 +33,10 @@ Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed
     Settings › Scripts › Hide › Self first); **Visible again** undoes it.
   - 💰 **Money**: set your money to any amount (saved to your account).
   - 🎁 **Unlock every item**: adds every item in the game to your inventory (saved to your account).
+- **🧸 Held**: save the item you're holding (in your hands, or a misc item) exactly as it is: crafted name,
+  description, crafter, colours and settings. **Hold** puts a save back in your hands whenever you like. You can
+  also save what the player open in the game is holding. Saves stay in your browser; **Export** and **Import**
+  move them as a file. If you used NFT (Nest of Fluffy Treasures), its saves and export files come in too.
 
 SlimeCheat is built so it breaks before the game does: every cheat runs inside a guard, so if the game
 changes, the cheat shows an error in the panel (or says which game function is gone) and the game carries on.
