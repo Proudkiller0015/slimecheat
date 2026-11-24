@@ -19,6 +19,8 @@ Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed
 - **🎵 Songs / 🖼 Images**: upload an mp3 or m4a (up to 500 MB; every song gets a .mp3 link, because the game only saves .mp3 and .mp4 music links: an m4a keeps its own bytes and plays fine) or a room background (.jpg, .png, .webp, up to 100 MB)
   and get a direct link to paste into your room's music or Image URL. Everyone in the room hears and sees
   it, add-on or not.
+- **🎬 Videos**: upload an mp4 or webm (up to 500 MB) and get a direct link that plays in SCE's HD TV (paste it
+  in the TV's menu): everyone in the room with SCE watches it together.
 - **📁 My files**: your uploads, newest first, with Copy link and Delete. Your files last 12 hours. (The owner can
   📌 keep a file forever, with an undo.)
 - **🎲 Dice**: rolls into the room exactly like `/dice`, with the result you type (or a fair roll).

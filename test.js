@@ -541,6 +541,37 @@ async function workerChecks() {
 		plain.res.ok && plainGet?.headers.get('content-type') === 'audio/mpeg',
 		plainGet?.headers.get('content-type'),
 	);
+
+	// Videos (for SCE's TV): mp4 and webm, checked by their bytes, served as video with byte ranges, listed as videos.
+	const clip = await upload('clip.mp4', m4aSong);
+	const clipGet = clip.url ? await fetch(clip.url) : null;
+	const clipBytes = clipGet ? Buffer.from(await clipGet.arrayBuffer()) : Buffer.alloc(0);
+	const clipPart = clip.url ? await fetch(clip.url, { headers: { Range: 'bytes=0-7' } }) : null;
+	const clipListed = (await (await call('GET', '/upload/files', { key: KEY })).json()).files.find((f) => f.url === clip.url);
+	check(
+		'an mp4 video uploads, its link ends in .mp4, it is served as video/mp4 byte for byte (and in ranges) and listed as a video',
+		clip.res.ok &&
+			clip.url.endsWith('.mp4') &&
+			clipGet.headers.get('content-type') === 'video/mp4' &&
+			clipBytes.equals(m4aSong) &&
+			clipPart?.status === 206 &&
+			clipListed?.kind === 'video',
+		{ status: clip.res.status, url: clip.url, type: clipGet?.headers.get('content-type'), range: clipPart?.status, listed: clipListed },
+	);
+	const webmBytes = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81]), Buffer.alloc(2000, 7)]);
+	const webm = await upload('clip.webm', webmBytes);
+	const webmGet = webm.url ? await fetch(webm.url) : null;
+	check(
+		'a webm video uploads and is served as video/webm',
+		webm.res.ok && webm.url.endsWith('.webm') && webmGet?.headers.get('content-type') === 'video/webm',
+		{ status: webm.res.status, type: webmGet?.headers.get('content-type') },
+	);
+	const fakeMp4 = await upload('fake.mp4', mp3(1000));
+	const fakeWebm = await upload('fake.webm', m4aSong);
+	check('mp3 bytes named .mp4, or mp4 bytes named .webm: 415 at the first part', fakeMp4.res.status === 415 && fakeWebm.res.status === 415, [
+		fakeMp4.res.status,
+		fakeWebm.res.status,
+	]);
 	await emptyBucket();
 }
 
@@ -873,8 +904,8 @@ async function browserChecks() {
 		check('the panel opens on Songs with Upload song', (await visible('pick')) && (await text('pick')) === '🎵 Upload song');
 		const tabs = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-tabs [data-page]')].map((t) => t.textContent).join(' | '));
 		check(
-			'the pages are Songs | Images | My files | Dice | Cheats | Held | Chat | ⚙ Settings',
-			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | 🧸 Held | 💬 Chat | ⚙',
+			'the pages are Songs | Videos | Images | My files | Dice | Cheats | Held | Chat | ⚙ Settings',
+			tabs === '🎵 Songs | 🎬 Videos | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | 🧸 Held | 💬 Chat | ⚙',
 			tabs,
 		);
 		check(

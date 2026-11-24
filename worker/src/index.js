@@ -1,6 +1,6 @@
 /**
- * SlimeCheat uploads: players upload mp3 and m4a songs in parts (R2 multipart) and room background images in one
- * request, and anyone can load them back from this Worker. It never fetches other sites; it only writes to
+ * SlimeCheat uploads: players upload mp3 and m4a songs and mp4 and webm videos in parts (R2 multipart) and room
+ * background images in one request, and anyone can load them back from this Worker. It never fetches other sites; it only writes to
  * and reads from its bucket.
  *
  * Who is uploading comes from a SlimeBeep proof (any player; the first proof for a member number pins its
@@ -8,13 +8,13 @@
  * owners (OWNERS) keep files 5 days and can list and delete everyone's. Other players' files last
  * OTHER_LIFE, count toward OTHER_CAP each, and are the first to go when the bucket is full.
  *
- * POST   /upload                       { name, size } -> { key, uploadId, partSize }   (a song, or an image over 25 MB)
+ * POST   /upload                       { name, size } -> { key, uploadId, partSize }   (a song, a video, or an image over 25 MB)
  * PUT    /upload/<key>/<part>?uploadId  the part's bytes -> { etag }                   (key needed)
  * POST   /upload/<key>/done?uploadId    { parts } -> { url }                            (key needed)
  * DELETE /upload/<key>?uploadId         cancels an upload                               (key needed)
  * PUT    /upload/image?name             the image's bytes -> { url }                    (key needed)
  * GET    /upload/files                  -> { files (newest first), used, cap }           (key needed)
- * DELETE /upload/files/<key>            deletes a song or an image                      (key needed)
+ * DELETE /upload/files/<key>            deletes a song, video or image                  (key needed)
  * POST   /upload/keep/<key>             keeps a file forever (owners); DELETE undoes it
  * GET    /<key>                         the file, with Range support, for everyone
  *
@@ -27,6 +27,8 @@ const MB = 1024 * 1024;
 const PART = 50 * MB;
 /** Largest song accepted. */
 const MAX_SONG = 500 * MB;
+/** Largest video accepted. */
+const MAX_VIDEO = 500 * MB;
 /** Largest image accepted (bigger than ONE_SHOT: sent in parts, like songs). */
 const MAX_IMAGE = 100 * MB;
 /** Largest image taken in one request (PUT /upload/image); the Worker reads it whole to check it. */
@@ -40,11 +42,15 @@ const OTHER_LIFE = 12 * 60 * 60 * 1000;
 /** Most bytes one other player may have stored at once (files and unfinished uploads). */
 const OTHER_CAP = 1000 * MB;
 /** File keys: random hex and the extension of the file's real type. */
-const KEY_RE = /^[0-9a-f]{32}\.(mp3|m4a|jpg|png|webp)$/;
+const KEY_RE = /^[0-9a-f]{32}\.(mp3|m4a|mp4|webm|jpg|png|webp)$/;
 /** Song names and keys: mp3, or m4a (AAC in an MP4 file). */
 const SONG_NAME = /\.(mp3|m4a)$/i;
 /** The served type of each song extension. */
 const SONG_TYPES = { mp3: 'audio/mpeg', m4a: 'audio/mp4' };
+/** Video names and keys (for SCE's TV, or any page): mp4 or webm. */
+const VIDEO_NAME = /\.(mp4|webm)$/i;
+/** The served type of each video extension. */
+const VIDEO_TYPES = { mp4: 'video/mp4', webm: 'video/webm' };
 /** Image names the game takes as a room background (ChatAdminRoomCustomizationImageFormats). */
 const IMAGE_NAME = /\.(jpe?g|png|webp)$/i;
 /** The served type of each image extension. */
@@ -83,6 +89,18 @@ function isMp3(b) {
  */
 function isM4a(b) {
 	return String.fromCharCode(...b.slice(4, 8)) === 'ftyp';
+}
+
+/**
+ * Whether bytes start like the video type a key says: an MP4 ('ftyp' at byte 4) or a WebM (an EBML header).
+ * @param {Uint8Array} b
+ * @param {string} key
+ */
+function isVideo(b, key) {
+	if (key.endsWith('.mp4')) {
+		return isM4a(b);
+	}
+	return key.endsWith('.webm') && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3;
 }
 
 /**
@@ -379,7 +397,7 @@ async function listFiles(request, env, cors, who) {
 			files: shown.reverse().map((o) => ({
 				url: `${url.origin}/${o.key}`,
 				name: o.customMetadata?.name || o.key,
-				kind: SONG_NAME.test(o.key) ? 'song' : 'image',
+				kind: SONG_NAME.test(o.key) ? 'song' : VIDEO_NAME.test(o.key) ? 'video' : 'image',
 				size: o.size,
 				uploaded: o.uploaded.getTime(),
 				expires: kept.has(o.key) ? null : expiry(env, o),
@@ -445,9 +463,10 @@ async function start(request, env, cors, who) {
 	const body = await request.json().catch(() => ({}));
 	const size = Number(body.size);
 	const song = typeof body.name === 'string' && SONG_NAME.test(body.name);
+	const video = typeof body.name === 'string' && VIDEO_NAME.test(body.name);
 	const image = typeof body.name === 'string' && IMAGE_NAME.test(body.name);
-	if (!song && !image) {
-		return json({ error: 'Only .mp3 or .m4a songs and .jpg, .jpeg, .png or .webp images can be uploaded.' }, 415, cors);
+	if (!song && !video && !image) {
+		return json({ error: 'Only .mp3 or .m4a songs, .mp4 or .webm videos and .jpg, .jpeg, .png or .webp images can be uploaded.' }, 415, cors);
 	}
 	if (!Number.isInteger(size) || size < 1) {
 		return json({ error: 'The file is empty.' }, 400, cors);
@@ -455,6 +474,9 @@ async function start(request, env, cors, who) {
 	// The owners have no size limit: only the bucket's cap (makeRoom) holds them.
 	if (song && size > MAX_SONG && !who.admin) {
 		return json({ error: 'Songs can be at most 500 MB.' }, 413, cors);
+	}
+	if (video && size > MAX_VIDEO && !who.admin) {
+		return json({ error: `Videos can be at most ${MAX_VIDEO / MB} MB.` }, 413, cors);
 	}
 	if (image && size > MAX_IMAGE && !who.admin) {
 		return json({ error: `Images can be at most ${MAX_IMAGE / MB} MB.` }, 413, cors);
@@ -466,7 +488,7 @@ async function start(request, env, cors, who) {
 		return json({ error: 'Other uploads in progress fill the storage. Try again once they finish.' }, 507, cors);
 	}
 	// A file's link ends in the extension its name says; its first part must really be that type.
-	const ext = /** @type {'mp3' | 'm4a' | 'jpg' | 'png' | 'webp'} */ (
+	const ext = /** @type {'mp3' | 'm4a' | 'mp4' | 'webm' | 'jpg' | 'png' | 'webp'} */ (
 		String(body.name).toLowerCase().split('.').pop().replace('jpeg', 'jpg')
 	);
 	const key = `${randomName()}.${ext}`;
@@ -474,7 +496,13 @@ async function start(request, env, cors, who) {
 	// besides .mp4; it is checked and served as the m4a it is.
 	const m4aAsMp3 = ext === 'mp3' && body.m4a === true;
 	const multipart = await env.SONGS.createMultipartUpload(key, {
-		httpMetadata: { contentType: song ? SONG_TYPES[m4aAsMp3 ? 'm4a' : ext] : IMAGE_TYPES[ext] },
+		httpMetadata: {
+			contentType: song
+				? SONG_TYPES[/** @type {'mp3' | 'm4a'} */ (m4aAsMp3 ? 'm4a' : ext)]
+				: video
+					? VIDEO_TYPES[/** @type {'mp4' | 'webm'} */ (ext)]
+					: IMAGE_TYPES[/** @type {'jpg' | 'png' | 'webp'} */ (ext)],
+		},
 		customMetadata: { name: cleanName(body.name), ...byMeta(who) },
 	});
 	await env.SONGS.put(PENDING + key, null, {
@@ -536,7 +564,11 @@ async function putPart(request, env, cors, key, uploadId, n) {
 			await cancel(env, key, uploadId);
 			return json({ error: 'This file is not a real m4a.' }, 415, cors);
 		}
-		if (!SONG_NAME.test(key) && imageType(new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength))) !== key.split('.').pop()) {
+		if (VIDEO_NAME.test(key) && !isVideo(head, key)) {
+			await cancel(env, key, uploadId);
+			return json({ error: 'This file is not a real MP4 or WebM video of the type its name says.' }, 415, cors);
+		}
+		if (IMAGE_NAME.test(key) && imageType(new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength))) !== key.split('.').pop()) {
 			await cancel(env, key, uploadId);
 			return json({ error: 'This file is not a real JPEG, PNG or WEBP image of the type its name says.' }, 415, cors);
 		}

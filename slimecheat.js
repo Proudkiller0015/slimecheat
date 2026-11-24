@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.15.0';
+	const VERSION = '2.16.0';
 	w.SlimeCheat = Object.freeze({
 		version: VERSION,
 		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
@@ -33,6 +33,8 @@
 	const WAIT_SLIMEBEEP = Number(w.SlimeCheatWait) || 45000;
 	/** Largest song the storage takes. */
 	const MAX_SONG = 500 * 1024 * 1024;
+	/** Largest video the storage takes. */
+	const MAX_VIDEO = 500 * 1024 * 1024;
 	/** Largest image the storage takes. */
 	const MAX_IMAGE = 100 * 1024 * 1024;
 	/** Images up to this go in one request; bigger ones in parts, like songs. */
@@ -45,6 +47,11 @@
 			pick: '🎵 Upload song',
 			hint: 'mp3 or m4a, up to 500 MB',
 			accept: '.mp3,.m4a,audio/mpeg,audio/mp4,audio/x-m4a',
+		},
+		videos: {
+			pick: '🎬 Upload video',
+			hint: 'mp4 or webm, up to 500 MB: its link plays in SCE TVs',
+			accept: '.mp4,.webm,video/mp4,video/webm',
 		},
 		images: {
 			pick: '🖼 Upload image',
@@ -189,7 +196,7 @@
 		</style>
 		<div id="sc-root">
 			<div class="sc-tabs" id="sc-tabs">
-				<button class="sb-pill" data-page="songs">🎵 Songs</button><button class="sb-pill" data-page="images">🖼 Images</button>
+				<button class="sb-pill" data-page="songs">🎵 Songs</button><button class="sb-pill" data-page="videos">🎬 Videos</button><button class="sb-pill" data-page="images">🖼 Images</button>
 				<button class="sb-pill" data-page="files">📁 My files</button><button class="sb-pill" data-page="dice">🎲 Dice</button>
 				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="held">🧸 Held</button><button class="sb-pill" data-page="chat">💬 Chat</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
 			</div>
@@ -369,7 +376,7 @@
 		 */
 		const page = (name) => {
 			fail('');
-			const upload = name === 'songs' || name === 'images';
+			const upload = name === 'songs' || name === 'videos' || name === 'images';
 			if (upload && name !== kind) {
 				kind = name;
 				$('pick').textContent = KINDS[kind].pick;
@@ -564,6 +571,26 @@
 			return '';
 		};
 		/**
+		 * Why a video can't be uploaded, or '' if it can.
+		 * @param {File} file
+		 */
+		const videoRefusal = async (file) => {
+			const ext = (/\.(mp4|webm)$/i.exec(file.name) || [])[1]?.toLowerCase();
+			if (!ext || (file.type && !/^video\/(mp4|webm)$/.test(file.type))) {
+				return `"${file.name}" is not an mp4 or webm. Only mp4 and webm videos can be uploaded.`;
+			}
+			if (!file.size) {
+				return 'That file is empty.';
+			}
+			if (file.size > MAX_VIDEO && !isOwner) {
+				return `"${file.name}" is ${Math.round(file.size / 1048576)} MB; videos can be at most 500 MB.`;
+			}
+			const b = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+			const real =
+				ext === 'mp4' ? String.fromCharCode(...b.slice(4, 8)) === 'ftyp' : b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3;
+			return real ? '' : `"${file.name}" is not a real ${ext} inside (only its name says so).`;
+		};
+		/**
 		 * Why a song can't be uploaded, or '' if it can.
 		 * @param {File} file
 		 */
@@ -593,7 +620,8 @@
 			$('copied').textContent = '';
 			fail('');
 			const image = kind === 'images';
-			const why = await (image ? imageRefusal : refusal)(file);
+			const video = kind === 'videos';
+			const why = await (image ? imageRefusal : video ? videoRefusal : refusal)(file);
 			if (why) {
 				fail(why);
 				return;
@@ -625,8 +653,8 @@
 				}
 				// Songs always get a .mp3 link: the game's room music only saves .mp3 and .mp4 links, and plays an m4a
 				// behind a .mp3 link fine. An m4a goes up as it is; the Worker checks and serves it as the m4a it is.
-				const m4a = !image && songType(new Uint8Array(await file.slice(0, 12).arrayBuffer())) === 'm4a';
-				const name = image ? file.name : file.name.replace(/\.(mp3|m4a)$/i, '.mp3');
+				const m4a = !image && !video && songType(new Uint8Array(await file.slice(0, 12).arrayBuffer())) === 'm4a';
+				const name = image || video ? file.name : file.name.replace(/\.(mp3|m4a)$/i, '.mp3');
 				started = await call('POST', '/upload', signal, { name, size: file.size, ...(m4a ? { m4a } : {}) });
 				const { key, uploadId, partSize } = /** @type {{ key: string, uploadId: string, partSize: number }} */ (started);
 				const parts = [];
@@ -805,8 +833,8 @@
 
 		/** Under the upload button: your own songs (on Songs) or images (on Images), newest first. */
 		const listKind = async () => {
-			const want = kind === 'images' ? 'image' : 'song';
-			const what = kind === 'images' ? 'images' : 'songs';
+			const want = kind === 'images' ? 'image' : kind === 'videos' ? 'video' : 'song';
+			const what = kind;
 			/** @type {{ files: { url: string, name: string, kind: string, size: number, uploaded: number, expires: number, kept?: boolean }[], admin?: boolean }} */
 			let answer;
 			try {
@@ -817,7 +845,7 @@
 				$('recent').replaceChildren();
 				return;
 			}
-			if ((kind === 'images' ? 'image' : 'song') !== want) {
+			if (kind !== what) {
 				return;
 			}
 			noteOwner(!!answer.admin);
