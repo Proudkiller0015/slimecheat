@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.16.0';
+	const VERSION = '2.16.1';
 	w.SlimeCheat = Object.freeze({
 		version: VERSION,
 		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
@@ -230,7 +230,7 @@
 			<div class="sc-page" id="sc-cheats" hidden>
 				<div class="sb-row" style="display:block;cursor:default">
 					<label class="sc-check" style="margin-top:0"><input type="checkbox" id="sc-god"> <b>👑 God mode</b></label>
-					<div class="sb-hint">Nothing holds you: restraints, cages, blindfolds, earplugs and gags don't touch you, the wardrobe opens and you can always leave. Zones other items cover are open on anyone, every activity shows whatever it needs (add-ons' too), and a leash can't drag you. On a map you walk through walls, see past them and reach anyone from afar. Other people's permissions and limits still count.</div>
+					<div class="sb-hint">Nothing holds you: restraints, cages, blindfolds, earplugs and gags don't touch you, the wardrobe opens and you can always leave. Zones other items cover are open on anyone, items go on through clothes, every activity shows whatever it needs (add-ons' too), and a leash can't drag you. On a map you walk through walls, see past them and reach anyone from afar. Other people's permissions and limits still count.</div>
 					<span class="sb-hint" id="sc-goddone"></span>
 				</div>
 				<div class="sb-row" style="display:block;cursor:default">
@@ -4027,6 +4027,14 @@
 		InventoryGroupIsBlockedForCharacter: () => false,
 		InventoryGroupIsAvailable: () => null,
 		InventoryGroupIsBlocked: () => false,
+		// Items go on through clothes: "remove clothes first" and "unzip the suit first" don't stop you (other players'
+		// games don't check those when the item arrives). Every other item requirement (poses, chastity, body) stays.
+		// (The game's own validation tries prerequisites on throwaway "PrerequisiteCheck" characters: those keep the rule.)
+		InventoryPrerequisiteMessage: (args, next) => {
+			const why = next(args);
+			const check = String(args[0]?.CharacterID || '').startsWith('PrerequisiteCheck');
+			return !check && (why === 'RemoveClothesForItem' || why === 'UnZipSuitForItem') ? '' : why;
+		},
 		InventoryIsBlockedByDistance: () => false,
 		ChatRoomMapViewCharacterOnInteractionRange: () => true,
 		ChatRoomMapViewCharacterOnWhisperRange: () => true,
