@@ -37,6 +37,10 @@ Violentmonkey). Like SlimeBeep, it always runs the newest version: the installed
   description, crafter, colours and settings. **Hold** puts a save back in your hands whenever you like. You can
   also save what the player open in the game is holding. Saves stay in your browser; **Export** and **Import**
   move them as a file. If you used NFT (Nest of Fluffy Treasures), its saves and export files come in too.
+- **💬 Chat**: every line of the room chat is saved in your browser as it comes in, so a void or a reload
+  doesn't lose it. Each line is deleted 48 hours after it came in. **🧹 Clear chat** empties the chat on screen
+  and keeps the saved copy; **Put back in chat** brings a visit's lines back into the chat; **Save as file**
+  downloads it as text. Nothing is sent anywhere.
 
 SlimeCheat is built so it breaks before the game does: every cheat runs inside a guard, so if the game
 changes, the cheat shows an error in the panel (or says which game function is gone) and the game carries on.

@@ -873,8 +873,8 @@ async function browserChecks() {
 		check('the panel opens on Songs with Upload song', (await visible('pick')) && (await text('pick')) === '🎵 Upload song');
 		const tabs = await inPanel((h) => [...h.shadowRoot.querySelectorAll('#sc-tabs [data-page]')].map((t) => t.textContent).join(' | '));
 		check(
-			'the pages are Songs | Images | My files | Dice | Cheats | Held | ⚙ Settings',
-			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | 🧸 Held | ⚙',
+			'the pages are Songs | Images | My files | Dice | Cheats | Held | Chat | ⚙ Settings',
+			tabs === '🎵 Songs | 🖼 Images | 📁 My files | 🎲 Dice | 🔓 Cheats | 🧸 Held | 💬 Chat | ⚙',
 			tabs,
 		);
 		check(
@@ -2410,8 +2410,8 @@ async function browserChecks() {
 			'💻 !hackpanel opens a page with every hidden command as a button, on the player open in the game',
 			hack.shown &&
 				/On Drone · ItemArms/.test(hack.on) &&
-				hack.buttons.length === 15 &&
-				['!burn', '!restorelock', '!addlock', '!keepon', '!listoutfit'].every((c) => hack.buttons.includes(c)),
+				hack.buttons.length === 16 &&
+				['!burn', '!restorelock', '!addlock', '!keepon', '!listoutfit', '!clearchat'].every((c) => hack.buttons.includes(c)),
 			hack,
 		);
 		await page.evaluate(() => {

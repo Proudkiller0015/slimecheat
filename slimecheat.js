@@ -7,7 +7,7 @@
 	if (w.SlimeCheat) {
 		return;
 	}
-	const VERSION = '2.14.0';
+	const VERSION = '2.15.0';
 	w.SlimeCheat = Object.freeze({
 		version: VERSION,
 		/** A member's outfit ('outfits') or wear ('worn') history, newest first. */
@@ -183,12 +183,15 @@
 			.sc-worn .sb-main b { overflow-wrap: anywhere; }
 			.sc-held .sb-main { flex: 1; min-width: 0; }
 			.sc-held .sb-sub { white-space: normal; overflow: visible; text-overflow: clip; }
+			.sc-chatlines { max-height: 260px; overflow: auto; font-size: 12px; line-height: 1.35; display: flex; flex-direction: column; gap: 2px; }
+			.sc-chatlines > div { overflow-wrap: anywhere; }
+			.sc-chatlines time { opacity: .6; margin-right: 4px; font-variant-numeric: tabular-nums; }
 		</style>
 		<div id="sc-root">
 			<div class="sc-tabs" id="sc-tabs">
 				<button class="sb-pill" data-page="songs">🎵 Songs</button><button class="sb-pill" data-page="images">🖼 Images</button>
 				<button class="sb-pill" data-page="files">📁 My files</button><button class="sb-pill" data-page="dice">🎲 Dice</button>
-				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="held">🧸 Held</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
+				<button class="sb-pill" data-page="cheats">🔓 Cheats</button><button class="sb-pill" data-page="held">🧸 Held</button><button class="sb-pill" data-page="chat">💬 Chat</button><button class="sb-pill" data-page="settings" title="Settings">⚙</button>
 			</div>
 			<div class="sc-page" id="sc-upload">
 				<div class="sc-line"><button class="sb-go" id="sc-pick">🎵 Upload song</button><span class="sb-hint" id="sc-limits">mp3 or m4a, up to 500 MB</span></div>
@@ -270,6 +273,14 @@
 				<div class="sc-line"><button class="sb-pill" id="sc-heldexport">⬇ Export</button><button class="sb-pill" id="sc-heldimport">⬆ Import</button><button class="sb-pill" id="sc-heldnft" hidden></button></div>
 				<input type="file" id="sc-heldfile" accept=".json,application/json" hidden>
 				<div id="sc-heldlist"></div>
+			</div>
+			<div class="sc-page" id="sc-chat" hidden>
+				<div class="sb-hint">Every line of the room chat is saved in this browser as it comes in, so a void or a reload doesn't lose it. Each line is deleted 48 hours after it came in. Nothing is sent anywhere.</div>
+				<div class="sc-line"><button class="sb-go" id="sc-chatclear">🧹 Clear chat</button><span class="sb-hint">Empties the chat on screen; the saved copy stays.</span></div>
+				<div class="sc-line"><select class="sb-search" id="sc-chatvisit" style="flex:1"></select><button class="sb-pill" id="sc-chatrefresh" title="Refresh">↻</button></div>
+				<div class="sc-line"><button class="sb-pill" id="sc-chatback">↩ Put back in chat</button><button class="sb-pill" id="sc-chatfile">⬇ Save as file</button><button class="sb-pill" id="sc-chatforget">🗑 Delete</button></div>
+				<span class="sb-hint" id="sc-chatdone"></span>
+				<div class="sc-chatlines" id="sc-chatlines"></div>
 			</div>
 			<div class="sc-page" id="sc-wear" hidden>
 				<div class="sc-line"><div class="sb-name" id="sc-wearhead" style="flex:1"></div><button class="sb-pill" id="sc-wearclose" title="Close">✕</button></div>
@@ -367,7 +378,7 @@
 				$('done').hidden = true;
 			}
 			$('upload').hidden = !upload;
-			for (const p of ['files', 'dice', 'cheats', 'held', 'settings', 'wear', 'locks', 'hack']) {
+			for (const p of ['files', 'dice', 'cheats', 'held', 'chat', 'settings', 'wear', 'locks', 'hack']) {
 				$(p).hidden = name !== p;
 			}
 			for (const tab of root.querySelectorAll('#sc-tabs [data-page]')) {
@@ -382,6 +393,8 @@
 				guard(showMoney);
 			} else if (name === 'held') {
 				guard(showHeld);
+			} else if (name === 'chat') {
+				guard(showChat);
 			}
 		};
 		$('tabs').addEventListener('click', (e) => {
@@ -2148,6 +2161,7 @@
 			['!addlock', '🔒 Add a new lock'],
 			['!keepon', '🔁 Keep the item on (again to let go)'],
 			['!burnbutton', '🔥 Floating burn button'],
+			['!clearchat', '🧹 Clear the chat (the saved copy stays)'],
 		];
 		const fillHack = () => {
 			const C = typeof w.CharacterGetCurrent === 'function' ? w.CharacterGetCurrent() : null;
@@ -2182,6 +2196,139 @@
 			}
 		}, 1000);
 		onClick('hackclose', () => page('cheats'));
+
+		// ---- 💬 Chat (saved by the chat saver, below the panel)
+		/** How many of a visit's lines the page shows (the file has them all). */
+		const CHAT_SHOWN = 300;
+		/** @type {{ id: string, room: string, start: number, last: number, count: number }[]} */
+		let chatList = [];
+		const chatPick = /** @type {HTMLSelectElement} */ ($('chatvisit'));
+		const chatChosen = () => chatList.find((v) => v.id === chatPick.value) || null;
+		const chatWhen = (/** @type {number} */ t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+		/** Shows the lines of the visit picked. */
+		const showChatLines = async () => {
+			const box = $('chatlines');
+			const v = chatChosen();
+			for (const id of ['chatback', 'chatfile', 'chatforget']) {
+				/** @type {HTMLButtonElement} */ ($(id)).disabled = !v;
+			}
+			if (!v) {
+				box.replaceChildren(make('div', 'sb-hint', 'No saved chat yet: it starts saving as soon as you are in a room.'));
+				return;
+			}
+			const lines = await chatLines(v.id);
+			if (chatChosen()?.id !== v.id) {
+				return;
+			}
+			const shown = lines.slice(-CHAT_SHOWN);
+			const rows = shown.map((l) => {
+				const row = make('div');
+				const time = make('time', '', new Date(l.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+				row.append(time, document.createTextNode(l.text));
+				return row;
+			});
+			if (lines.length > shown.length) {
+				rows.unshift(make('div', 'sb-hint', `The last ${shown.length} of ${lines.length} lines (⬇ Save as file has them all).`));
+			}
+			const end = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+			box.replaceChildren(...rows);
+			if (end) {
+				box.scrollTop = box.scrollHeight;
+			}
+		};
+		/** Fills the visit list (keeping the one picked when it's still there). */
+		const showChat = async () => {
+			const me = player()?.MemberNumber;
+			const was = chatPick.value;
+			chatList = me ? await chatVisits(me) : [];
+			chatPick.replaceChildren(
+				...chatList.map((v) => {
+					const o = /** @type {HTMLOptionElement} */ (
+						make('option', '', `${v.room || 'Chat'} · ${chatWhen(v.start)} · ${v.count} line${v.count === 1 ? '' : 's'}`)
+					);
+					o.value = v.id;
+					return o;
+				}),
+			);
+			if (!chatList.length) {
+				chatPick.append(make('option', '', me ? 'Nothing saved yet' : 'Log in first'));
+			}
+			if (chatList.some((v) => v.id === was)) {
+				chatPick.value = was;
+			}
+			await showChatLines();
+		};
+		chatPick.addEventListener('change', () => {
+			$('chatdone').textContent = '';
+			guard(showChatLines);
+		});
+		onClick('chatrefresh', showChat);
+		onClick('chatclear', async () => {
+			const gone = chatClear();
+			$('chatdone').textContent =
+				gone < 0 ? 'Open a chat room first.' : `🧹 Chat cleared (${gone} line${gone === 1 ? '' : 's'}); the saved copy is below.`;
+			// The lines just saved are written a moment later.
+			await chatWriting;
+			await showChat();
+		});
+		onClick('chatback', async () => {
+			const v = chatChosen();
+			if (!v) {
+				return;
+			}
+			const n = await chatPutBack(v.id, v.room);
+			$('chatdone').textContent =
+				n < 0
+					? 'Open a chat room first: the lines go back into its chat.'
+					: n
+						? `↩ ${n} line${n === 1 ? '' : 's'} put back at the top of the chat.`
+						: 'Those lines are in the chat already.';
+		});
+		onClick('chatfile', async () => {
+			const v = chatChosen();
+			if (v) {
+				const n = await chatFile(v.id, v.room);
+				$('chatdone').textContent = `⬇ Saved ${n} line${n === 1 ? '' : 's'} as a text file.`;
+			}
+		});
+		const forgetButton = $('chatforget');
+		/** @type {any} */
+		let forgetArmed = 0;
+		const disarmForget = () => {
+			clearTimeout(forgetArmed);
+			forgetArmed = 0;
+			forgetButton.classList.remove('sc-sure');
+			forgetButton.textContent = '🗑 Delete';
+		};
+		onClick('chatforget', async () => {
+			const v = chatChosen();
+			const me = player()?.MemberNumber;
+			if (!v || !me) {
+				return;
+			}
+			if (!forgetArmed) {
+				forgetButton.classList.add('sc-sure');
+				forgetButton.textContent = '🗑 Sure? Click again';
+				forgetArmed = setTimeout(disarmForget, 4000);
+				return;
+			}
+			disarmForget();
+			await chatForget(me, v.id);
+			$('chatdone').textContent = `🗑 Deleted the saved chat of ${v.room || 'that visit'}.`;
+			await showChat();
+		});
+		// New lines show while the page is open on the visit being saved now.
+		setInterval(() => {
+			const me = player()?.MemberNumber;
+			if (!$('chat').hidden && me) {
+				const now = chatVisit.get(me)?.id;
+				if (now && !chatList.some((v) => v.id === now)) {
+					guard(showChat);
+				} else if (now && chatChosen()?.id === now) {
+					guard(showChatLines);
+				}
+			}
+		}, 3000);
 
 		// Keys typed in the panel stay out of the game.
 		for (const type of ['keydown', 'keyup', 'keypress']) {
@@ -3598,6 +3745,7 @@
 				'!addlock: a new lock from every lock the game knows (mods too) on the selected slot',
 				'!keepon: the selected item goes back on whenever it comes off (again to let go)',
 				'!burnbutton: a floating 🔥 button that burns like !burn; drag it to move it, × removes it',
+				'!clearchat: empties the room chat; the saved copy stays in 💬 Chat for 48 hours',
 				'!hackpanel: all of these as buttons, on the player open in the game',
 				'Restores are silent in the room: only you get a notice.',
 				'!cheats: opens SlimeCheat',
@@ -3747,6 +3895,7 @@
 		'!keepon': () => keepOnCmd(),
 		'!hackpanel': () => openPage('!hackpanel', () => showHack, []),
 		'!burnbutton': () => burnButtonCmd(),
+		'!clearchat': () => clearChatCmd(),
 		'!owner': ownerCard,
 	};
 	const burnTyped = () => {
@@ -4095,6 +4244,474 @@
 		},
 		true,
 	);
+
+	// ---- 💬 Chat saver: every line that lands in the game's chat log is copied into this browser (IndexedDB, its own
+	// database) as it comes in, so a void or a reload doesn't lose it. Nothing goes to a server. Each line is deleted
+	// CHAT_KEEP_MS (48 h) after it came in, line by line, so the oldest go first. Lines are grouped into visits: one
+	// room, until you change rooms or nothing comes in for CHAT_VISIT_GAP_MS. "Clear chat" empties the game's chat log
+	// and keeps the saved copy; "Put back" brings a visit's lines back into the chat log.
+	const CHAT_DB = 'slimecheat-chat';
+	const CHAT_KEEP_MS = Number(w.SlimeCheatChatKeepMs) || 48 * 3600000;
+	const CHAT_VISIT_GAP_MS = 60 * 60000;
+	/** Most lines kept in this browser (every account together); the oldest go first past it. */
+	const CHAT_MAX = Number(w.SlimeCheatChatMax) || 30000;
+	/** Longest line kept as it looked (longer ones are kept as text only). */
+	const CHAT_HTML_MAX = 8000;
+	/** @type {Promise<IDBDatabase | null> | null} */
+	let chatDbOpen = null;
+	/** The chat database, or null where the browser has no IndexedDB (then nothing is saved). */
+	const chatDb = () =>
+		(chatDbOpen ||= new Promise((resolve) => {
+			if (typeof indexedDB !== 'object' || !indexedDB) {
+				resolve(null);
+				return;
+			}
+			const req = indexedDB.open(CHAT_DB, 1);
+			req.onupgradeneeded = () => {
+				const lines = req.result.createObjectStore('lines', { keyPath: 'id', autoIncrement: true });
+				lines.createIndex('at', 'at');
+				lines.createIndex('visit', 'visit');
+				req.result.createObjectStore('visits', { keyPath: 'id' }).createIndex('last', 'last');
+			};
+			req.onsuccess = () => resolve(req.result);
+			req.onerror = () => {
+				console.warn('SlimeCheat: chat is not saved:', req.error);
+				resolve(null);
+			};
+			req.onblocked = () => resolve(null);
+		}));
+	/**
+	 * Runs a request and waits for its answer.
+	 * @param {IDBRequest} req
+	 * @returns {Promise<any>}
+	 */
+	const idb = (req) =>
+		new Promise((resolve, reject) => {
+			req.onsuccess = () => resolve(req.result);
+			req.onerror = () => reject(req.error);
+		});
+	/**
+	 * Waits for a transaction to finish.
+	 * @param {IDBTransaction} tx
+	 */
+	const idbDone = (tx) =>
+		new Promise((resolve, reject) => {
+			tx.oncomplete = () => resolve(undefined);
+			tx.onerror = () => reject(tx.error);
+			tx.onabort = () => reject(tx.error);
+		});
+
+	/** Chat log lines already saved, or put back by SlimeCheat (never saved twice). */
+	const chatSaved = new WeakSet();
+	/** @type {[HTMLElement, number][]} Lines waiting to be saved, with when they came in. */
+	let chatQueue = [];
+	let chatFlushTimer = 0;
+	/** @type {HTMLElement | null} The chat log being watched. */
+	let chatLogEl = null;
+	/** @type {MutationObserver | null} */
+	let chatObserver = null;
+	/** @type {Map<number, { id: string, room: string, last: number }>} Each account's visit lines go into now. */
+	const chatVisit = new Map();
+	/** Whether a message element is a line of the chat log (room headers too). */
+	const isChatLine = (/** @type {Node} */ n) => n instanceof HTMLElement && n.classList.contains('ChatMessage');
+	/** The game's chat log, when it's on screen. */
+	const chatLogNow = () => /** @type {HTMLElement | null} */ (document.getElementById('TextAreaChatLog'));
+	/** Sends every unsaved line of the chat log to be saved (lines added by the game come in through the observer). */
+	const chatQueueAll = () => {
+		const log = chatLogNow();
+		for (const n of log ? log.children : []) {
+			if (isChatLine(n) && !chatSaved.has(n) && !chatQueue.some(([q]) => q === n)) {
+				chatQueue.push([/** @type {HTMLElement} */ (n), Date.now()]);
+			}
+		}
+	};
+	/** Watches the chat log the game shows now (it makes a new one at each login). */
+	const chatWatch = () => {
+		const log = chatLogNow();
+		if (log === chatLogEl) {
+			return;
+		}
+		chatObserver?.disconnect();
+		chatLogEl = log;
+		if (!log || typeof MutationObserver !== 'function') {
+			return;
+		}
+		chatObserver = new MutationObserver((muts) => {
+			const at = Date.now();
+			for (const m of muts) {
+				for (const n of m.addedNodes) {
+					if (isChatLine(n) && !chatSaved.has(n)) {
+						chatQueue.push([/** @type {HTMLElement} */ (n), at]);
+					}
+				}
+			}
+			// A moment later: other add-ons finish dressing up the line first.
+			if (chatQueue.length && !chatFlushTimer) {
+				chatFlushTimer = setTimeout(() => {
+					chatFlushTimer = 0;
+					chatFlush();
+				}, 300);
+			}
+		});
+		chatObserver.observe(log, { childList: true });
+		// Lines that were there before SlimeCheat saw this log (it may load after login).
+		chatQueueAll();
+		chatFlush();
+	};
+	/**
+	 * A line as text: time stamp, member number and reply button left out.
+	 * @param {HTMLElement} el
+	 */
+	const chatText = (el) => {
+		const copy = /** @type {HTMLElement} */ (el.cloneNode(true));
+		for (const x of copy.querySelectorAll('.chat-room-metadata, .ReplyButton, .chat-room-sep-collapse, style, script')) {
+			x.remove();
+		}
+		return (copy.textContent || '').replace(/\s+/g, ' ').trim();
+	};
+	/** Each saved or put back line still in the chat log, by its uid: Put back skips those. */
+	const chatOnScreen = new Map();
+	/** Accounts whose latest visit was read from the database (so a reload carries on the same visit). */
+	const chatVisitLoaded = new Set();
+	/** Writes one after another, so visits are handed out in order. */
+	let chatWriting = Promise.resolve();
+	/** Saves the lines waiting. Reads them right away, so the chat log may be emptied as soon as this returns. */
+	const chatFlush = () => {
+		const me = player()?.MemberNumber;
+		const queued = chatQueue;
+		chatQueue = [];
+		if (!me || !queued.length) {
+			return chatWriting;
+		}
+		/** @type {any[]} */
+		const lines = [];
+		for (const [el, at] of queued) {
+			if (chatSaved.has(el)) {
+				continue;
+			}
+			chatSaved.add(el);
+			const sep = el.classList.contains('chat-room-sep');
+			const room = sep
+				? /** @type {HTMLElement | null} */ (el.querySelector('.chat-room-sep-header'))?.dataset.room || w.ChatRoomData?.Name || ''
+				: w.ChatRoomData?.Name || '';
+			const text = chatText(el);
+			if (!text && !sep) {
+				continue;
+			}
+			const uid = `${at}.${Math.random().toString(36).slice(2, 8)}`;
+			chatOnScreen.set(uid, el);
+			const html = el.outerHTML;
+			lines.push({
+				uid,
+				at,
+				me,
+				room,
+				sep,
+				sender: Number(el.dataset.sender) || 0,
+				msgid: el.querySelector('[msgid]')?.getAttribute('msgid') || '',
+				text: text || room,
+				html: html.length <= CHAT_HTML_MAX ? html : '',
+			});
+		}
+		if (!lines.length) {
+			return chatWriting;
+		}
+		chatWriting = chatWriting
+			.then(async () => {
+				const db = await chatDb();
+				if (!db) {
+					return;
+				}
+				// After a reload (or a void), lines in the same room carry on the visit from before.
+				if (!chatVisitLoaded.has(me)) {
+					chatVisitLoaded.add(me);
+					/** @type {any[]} */
+					const all = await idb(db.transaction('visits').objectStore('visits').getAll());
+					const last = all.filter((v) => v.me === me).sort((a, b) => b.last - a.last)[0];
+					if (last && !chatVisit.has(me)) {
+						chatVisit.set(me, last);
+					}
+				}
+				/** @type {Set<any>} */
+				const visits = new Set();
+				for (const line of lines) {
+					let v = chatVisit.get(me);
+					if (!v || v.room !== line.room || line.at - v.last > CHAT_VISIT_GAP_MS) {
+						v = { id: `${me}:${line.at}:${Math.random().toString(36).slice(2, 6)}`, room: line.room, last: line.at, me, start: line.at };
+						chatVisit.set(me, v);
+					}
+					v.last = Math.max(v.last, line.at);
+					visits.add(v);
+					line.visit = v.id;
+					delete line.room;
+				}
+				const tx = db.transaction(['lines', 'visits'], 'readwrite');
+				for (const line of lines) {
+					tx.objectStore('lines').add(line);
+				}
+				for (const v of visits) {
+					tx.objectStore('visits').put({ ...v });
+				}
+				await idbDone(tx);
+			})
+			.catch((e) => console.warn('SlimeCheat: a chat line was not saved:', e));
+		return chatWriting;
+	};
+	/** Deletes lines older than CHAT_KEEP_MS (and the oldest past CHAT_MAX), and visits left empty. */
+	const chatPrune = async () => {
+		const db = await chatDb();
+		if (!db) {
+			return;
+		}
+		const cutoff = Date.now() - CHAT_KEEP_MS;
+		const tx = db.transaction(['lines', 'visits'], 'readwrite');
+		const lines = tx.objectStore('lines');
+		lines.index('at').openKeyCursor(IDBKeyRange.upperBound(cutoff, true)).onsuccess = (e) => {
+			const cur = /** @type {IDBCursor | null} */ (/** @type {IDBRequest} */ (e.target).result);
+			if (cur) {
+				lines.delete(cur.primaryKey);
+				cur.continue();
+			}
+		};
+		const visits = tx.objectStore('visits');
+		visits.index('last').openCursor(IDBKeyRange.upperBound(cutoff, true)).onsuccess = (e) => {
+			const cur = /** @type {IDBCursorWithValue | null} */ (/** @type {IDBRequest} */ (e.target).result);
+			if (cur) {
+				cur.delete();
+				cur.continue();
+			}
+		};
+		await idbDone(tx);
+		const count = await idb(db.transaction('lines').objectStore('lines').count());
+		if (count > CHAT_MAX) {
+			let extra = count - CHAT_MAX;
+			const tx2 = db.transaction('lines', 'readwrite');
+			tx2.objectStore('lines').openKeyCursor().onsuccess = (e) => {
+				const cur = /** @type {IDBCursor | null} */ (/** @type {IDBRequest} */ (e.target).result);
+				if (cur && extra-- > 0) {
+					tx2.objectStore('lines').delete(cur.primaryKey);
+					cur.continue();
+				}
+			};
+			await idbDone(tx2);
+		}
+	};
+	/**
+	 * The visits of an account, newest first, each with how many lines it still has.
+	 * @param {number} me
+	 * @returns {Promise<{ id: string, room: string, start: number, last: number, count: number }[]>}
+	 */
+	const chatVisits = async (me) => {
+		const db = await chatDb();
+		if (!db) {
+			return [];
+		}
+		const tx = db.transaction(['visits', 'lines']);
+		/** @type {any[]} */
+		const all = await idb(tx.objectStore('visits').getAll());
+		const mine = all.filter((v) => v.me === me);
+		const counts = await Promise.all(mine.map((v) => idb(tx.objectStore('lines').index('visit').count(v.id))));
+		return mine
+			.map((v, i) => ({ ...v, count: counts[i] }))
+			.filter((v) => v.count > 0)
+			.sort((a, b) => b.last - a.last);
+	};
+	/**
+	 * A visit's lines, oldest first.
+	 * @param {string} visit
+	 * @returns {Promise<any[]>}
+	 */
+	const chatLines = async (visit) => {
+		const db = await chatDb();
+		if (!db) {
+			return [];
+		}
+		/** @type {any[]} */
+		const lines = await idb(db.transaction('lines').objectStore('lines').index('visit').getAll(visit));
+		return lines.sort((a, b) => a.at - b.at || a.id - b.id);
+	};
+	/**
+	 * Forgets an account's saved chat (one visit, or all of it).
+	 * @param {number} me
+	 * @param {string} [visit]
+	 */
+	const chatForget = async (me, visit) => {
+		const db = await chatDb();
+		if (!db) {
+			return;
+		}
+		const ids = visit ? [visit] : (await chatVisits(me)).map((v) => v.id);
+		const tx = db.transaction(['lines', 'visits'], 'readwrite');
+		for (const id of ids) {
+			tx.objectStore('visits').delete(id);
+			const index = tx.objectStore('lines').index('visit');
+			index.openKeyCursor(IDBKeyRange.only(id)).onsuccess = (e) => {
+				const cur = /** @type {IDBCursor | null} */ (/** @type {IDBRequest} */ (e.target).result);
+				if (cur) {
+					tx.objectStore('lines').delete(cur.primaryKey);
+					cur.continue();
+				}
+			};
+		}
+		await idbDone(tx);
+		if (visit ? chatVisit.get(me)?.id === visit : true) {
+			chatVisit.delete(me);
+		}
+	};
+	/**
+	 * Empties the game's chat log after saving what's in it. The current room's header stays, so new lines still
+	 * land under it. Returns how many lines went, or -1 without a chat log.
+	 */
+	const chatClear = () => {
+		const log = chatLogNow();
+		if (!log) {
+			return -1;
+		}
+		chatWatch();
+		chatQueueAll();
+		chatFlush();
+		const seps = log.querySelectorAll(':scope > .chat-room-sep');
+		const keep = seps[seps.length - 1] || null;
+		let gone = 0;
+		for (const n of [...log.children]) {
+			if (n !== keep) {
+				gone += isChatLine(n) ? 1 : 0;
+				n.remove();
+			}
+		}
+		if (keep) {
+			// Its "new messages" count belonged to the lines that just went.
+			const button = /** @type {HTMLElement | null} */ (keep.querySelector('.chat-room-sep-header'));
+			if (button?.dataset.messages) {
+				button.dataset.messages = '0';
+			}
+		}
+		return gone;
+	};
+	/**
+	 * A saved line made into an element again, safe to put in the page (no scripts, no event attributes, no ids).
+	 * @param {any} line
+	 * @returns {HTMLElement}
+	 */
+	const chatElement = (line) => {
+		/** @type {HTMLElement | null} */
+		let el = null;
+		if (line.html) {
+			const t = document.createElement('template');
+			t.innerHTML = line.html;
+			const first = t.content.firstElementChild;
+			el = first instanceof HTMLElement ? first : null;
+		}
+		if (!el) {
+			el = make('div', 'ChatMessage ChatMessageAction', line.text);
+		}
+		for (const bad of el.querySelectorAll('script, iframe, object, embed, link, meta, base, form')) {
+			bad.remove();
+		}
+		for (const node of [el, ...el.querySelectorAll('*')]) {
+			for (const a of [...node.attributes]) {
+				const name = a.name.toLowerCase();
+				if (name.startsWith('on') || name === 'id' || /^\s*javascript:/i.test(a.value)) {
+					node.removeAttribute(a.name);
+				}
+			}
+		}
+		el.removeAttribute('hidden');
+		el.classList.add('sc-putback');
+		chatSaved.add(el);
+		return el;
+	};
+	/**
+	 * Puts a visit's saved lines back at the top of the game's chat log, skipping lines that are there already.
+	 * Returns how many went back, or -1 without a chat log.
+	 * @param {string} visit
+	 * @param {string} room
+	 */
+	const chatPutBack = async (visit, room) => {
+		const log = chatLogNow();
+		if (!log) {
+			return -1;
+		}
+		const there = new Set([...log.querySelectorAll('[msgid]')].map((x) => x.getAttribute('msgid')));
+		for (const [uid, el] of chatOnScreen) {
+			if (!el.isConnected) {
+				chatOnScreen.delete(uid);
+			}
+		}
+		// Room headers stay out (the game shows its own); so do lines on screen already.
+		const lines = (await chatLines(visit)).filter(
+			(l) => !l.sep && !chatOnScreen.has(l.uid) && (!l.msgid || !there.has(l.msgid)),
+		);
+		if (!lines.length) {
+			return 0;
+		}
+		const frag = document.createDocumentFragment();
+		const stamp = (/** @type {number} */ t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+		const head = make('div', 'ChatMessage ChatMessageAction sc-putback', `💬 Saved chat put back: ${room || 'a room'}, ${stamp(lines[0].at)} to ${stamp(lines[lines.length - 1].at)}`);
+		const foot = make('div', 'ChatMessage ChatMessageAction sc-putback', '💬 End of the saved chat');
+		for (const x of [head, foot]) {
+			x.style.fontStyle = 'italic';
+			chatSaved.add(x);
+		}
+		frag.append(
+			head,
+			...lines.map((l) => {
+				const el = chatElement(l);
+				if (l.uid) {
+					chatOnScreen.set(l.uid, el);
+				}
+				return el;
+			}),
+			foot,
+		);
+		log.prepend(frag);
+		if (typeof w.ElementScrollToEnd === 'function') {
+			w.ElementScrollToEnd('TextAreaChatLog');
+		}
+		return lines.length;
+	};
+	/**
+	 * A visit as a text file.
+	 * @param {string} visit
+	 * @param {string} room
+	 */
+	const chatFile = async (visit, room) => {
+		const lines = await chatLines(visit);
+		const day = (/** @type {number} */ t) => new Date(t).toLocaleString();
+		const text = [`${room || 'Chat'}: ${lines.length ? `${day(lines[0].at)} to ${day(lines[lines.length - 1].at)}` : 'empty'}`, '']
+			.concat(lines.map((l) => `[${new Date(l.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}] ${l.text}`))
+			.join('\n');
+		const a = document.createElement('a');
+		a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+		a.download = `${(room || 'chat').replace(/[\\/:*?"<>|]+/g, '_')} ${new Date(lines[0]?.at || Date.now()).toISOString().slice(0, 16).replace(':', '-')}.txt`;
+		a.click();
+		setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+		return lines.length;
+	};
+	// Watch for the chat log every second (it comes and goes with logins); prune every 10 minutes.
+	setInterval(() => {
+		try {
+			chatWatch();
+		} catch (e) {
+			console.warn('SlimeCheat chat saver:', e);
+		}
+	}, 1000);
+	chatPrune().catch((e) => console.warn('SlimeCheat: old chat not cleared:', e));
+	setInterval(() => chatPrune().catch(() => {}), 10 * 60000);
+	// Lines waiting when the page goes away (reload, closing the tab) are saved first.
+	w.addEventListener('pagehide', () => {
+		try {
+			chatQueueAll();
+			chatFlush();
+		} catch (e) {
+			/* the page is going anyway */
+		}
+	});
+	/** !clearchat: the 🧹 button, typed in a SlimeBeep chat box. */
+	const clearChatCmd = () => {
+		const gone = chatClear();
+		fireToast(gone < 0 ? '💬 Open a chat room first.' : `🧹 Chat cleared (${gone} line${gone === 1 ? '' : 's'}). The saved copy stays in 💬 Chat for 48 hours.`);
+	};
 
 	// Waits for SlimeBeep, then adds the panel; without it, says SlimeCheat needs it.
 	// It keeps waiting however late SlimeBeep loads (FUSAM may load it after login): the note only shows while
